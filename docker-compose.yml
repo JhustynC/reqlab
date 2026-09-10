@@ -1,0 +1,27 @@
+services:
+  api:
+    build:
+      context: .
+    container_name: reqlab-api
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /app/data
+      HF_HOME: /app/data/model_cache
+      ANONYMIZED_TELEMETRY: "False"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: reqlab-web
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+    restart: unless-stopped
