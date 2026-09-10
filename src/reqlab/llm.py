@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -27,6 +28,8 @@ class LLMClient(Protocol):
         timeout: int = 120,
     ) -> dict[str, Any] | list[Any]: ...
 
+    def get_last_telemetry(self) -> dict[str, Any]: ...
+
 
 class OpenAICompatibleClient:
     """Cliente mínimo para APIs compatibles con OpenAI Chat Completions."""
@@ -47,10 +50,14 @@ class OpenAICompatibleClient:
         ).rstrip("/")
         self.model = model or os.getenv("LLM_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
         self.max_retries = max_retries
+        self.last_telemetry: dict[str, Any] = {}
 
     @property
     def configured(self) -> bool:
         return bool(self.api_key)
+
+    def get_last_telemetry(self) -> dict[str, Any]:
+        return dict(self.last_telemetry)
 
     def complete_json(
         self,
@@ -80,6 +87,7 @@ class OpenAICompatibleClient:
             headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
             method="POST",
         )
+        start_time = time.perf_counter()
         try:
             with urlopen(request, timeout=timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
@@ -88,6 +96,18 @@ class OpenAICompatibleClient:
             raise RuntimeError(f"El LLM respondió HTTP {error.code}: {detail}") from error
         except URLError as error:
             raise RuntimeError(f"No se pudo conectar con el LLM: {error.reason}") from error
+        finally:
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+        usage = body.get("usage", {}) if isinstance(body, dict) else {}
+        self.last_telemetry = {
+            "latency_ms": elapsed_ms,
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+            "attempts": 1,
+        }
+
         try:
             content = body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as error:
@@ -109,12 +129,34 @@ class OpenAICompatibleClient:
     ) -> T:
         attempts = max_retries if max_retries is not None else self.max_retries
         last_error: Exception | None = None
+        total_latency_ms = 0.0
+        total_tokens_accum = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
         for attempt in range(1, attempts + 1):
             try:
                 payload = self.complete_json(system_prompt, user_prompt, temperature, timeout)
+                # Acumular telemetría
+                total_latency_ms += self.last_telemetry.get("latency_ms", 0.0)
+                for k in total_tokens_accum:
+                    val = self.last_telemetry.get(k)
+                    if val is not None:
+                        total_tokens_accum[k] += val
+
+                self.last_telemetry = {
+                    "latency_ms": round(total_latency_ms, 2),
+                    "prompt_tokens": total_tokens_accum["prompt_tokens"] or None,
+                    "completion_tokens": total_tokens_accum["completion_tokens"] or None,
+                    "total_tokens": total_tokens_accum["total_tokens"] or None,
+                    "attempts": attempt,
+                }
                 return schema.model_validate(payload)
             except (ValidationError, RuntimeError, ValueError) as error:
                 last_error = error
+                total_latency_ms += self.last_telemetry.get("latency_ms", 0.0)
+                for k in total_tokens_accum:
+                    val = self.last_telemetry.get(k)
+                    if val is not None:
+                        total_tokens_accum[k] += val
                 if attempt >= attempts:
                     break
                 user_prompt = (
@@ -122,7 +164,17 @@ class OpenAICompatibleClient:
                     f"La respuesta anterior no cumplió el esquema esperado ({error}). "
                     "Devuelve exclusivamente JSON válido que cumpla el contrato solicitado."
                 )
+
+        self.last_telemetry = {
+            "latency_ms": round(total_latency_ms, 2),
+            "prompt_tokens": total_tokens_accum["prompt_tokens"] or None,
+            "completion_tokens": total_tokens_accum["completion_tokens"] or None,
+            "total_tokens": total_tokens_accum["total_tokens"] or None,
+            "attempts": attempts,
+            "failed": True,
+        }
         raise RuntimeError(f"El LLM no devolvió una respuesta válida tras {attempts} intentos.") from last_error
+
 
 
 # Alias retrocompatible con la configuración y el código existente.

@@ -244,6 +244,7 @@ class ProjectApplicationService:
         )
         artifacts: list[Artifact] = []
         retrieval_log: dict[str, list[dict[str, Any]]] = {}
+        telemetry_log: dict[str, dict[str, Any]] = {}
         parent_run = run_id or self.repository.start_run(
             project_id,
             "generation",
@@ -266,13 +267,16 @@ class ProjectApplicationService:
                         project["name"],
                         project["domain"],
                     )
-                    generated, evidence = agent.generate(limit=limit_per_type)
+                    # Se inyectan los artefactos ya generados para asegurar coherencia y evitar redundancias cross-type
+                    generated, evidence = agent.generate(limit=limit_per_type, existing_artifacts=list(artifacts))
                     artifacts.extend(generated)
                     retrieval_log[artifact_type] = [
                         {"fragment_id": fragment.fragment_id, "rrf_score": round(score, 8)}
                         for fragment, score in evidence
                     ]
-                    self.repository.finish_run(child_run_id, "completed")
+                    agent_metrics = getattr(agent, "last_telemetry", {}) or {}
+                    telemetry_log[artifact_type] = agent_metrics
+                    self.repository.finish_run(child_run_id, "completed", metrics=agent_metrics)
                 except Exception as error:
                     self.repository.finish_run(child_run_id, "failed", str(error))
                     raise
@@ -281,8 +285,24 @@ class ProjectApplicationService:
             self.repository.save_artifacts(project_id, artifacts)
             self.repository.save_validation_report(project_id, report)
             progress(100, "Artefactos disponibles para revisión", "completed")
-            self.repository.finish_run(parent_run, "completed")
-            return {"artifacts": artifacts, "validation": report, "retrieval": retrieval_log}
+
+            # Métricas agregadas para el parent run
+            total_latency = sum(item.get("latency_ms", 0.0) for item in telemetry_log.values())
+            total_tokens = sum(item.get("total_tokens", 0) or 0 for item in telemetry_log.values())
+            total_attempts = sum(item.get("attempts", 1) for item in telemetry_log.values())
+            summary_metrics = {
+                "total_latency_ms": round(total_latency, 2),
+                "total_tokens": total_tokens or None,
+                "total_attempts": total_attempts,
+                "agents": telemetry_log,
+            }
+            self.repository.finish_run(parent_run, "completed", metrics=summary_metrics)
+            return {
+                "artifacts": artifacts,
+                "validation": report,
+                "retrieval": retrieval_log,
+                "telemetry": summary_metrics,
+            }
         except Exception as error:
             self.repository.finish_run(parent_run, "failed", str(error))
             self.repository.update_project_status(project_id, "ready_to_generate")

@@ -88,8 +88,13 @@ class SpecializedGenerationAgent:
         self.client = client
         self.project_name = project_name
         self.domain = domain or "dominio descrito por las fuentes"
+        self.last_telemetry: dict[str, Any] = {}
 
-    def generate(self, limit: int = 15) -> tuple[list[Artifact], list[tuple[Fragment, float]]]:
+    def generate(
+        self,
+        limit: int = 15,
+        existing_artifacts: list[Artifact] | None = None,
+    ) -> tuple[list[Artifact], list[tuple[Fragment, float]]]:
         # Construir query enriquecida: nombre + dominio + tarea genérica + términos especializados del tipo
         specialized = self.contract.retrieval_query or self.contract.task
         query = f"{self.project_name} {self.domain} {specialized}"
@@ -103,7 +108,7 @@ class SpecializedGenerationAgent:
                     f"Actúas como {self.contract.role}. Trabajas únicamente con evidencia citada. "
                     "Responde en español y devuelve exclusivamente JSON válido."
                 ),
-                user_prompt=self._prompt(evidence, limit),
+                user_prompt=self._prompt(evidence, limit, existing_artifacts or []),
                 schema=ArtifactsResponse,
             )
             records = [record.model_dump() for record in response.artifacts]
@@ -114,11 +119,15 @@ class SpecializedGenerationAgent:
                     f"Actúas como {self.contract.role}. Trabajas únicamente con evidencia citada. "
                     "Responde en español y devuelve exclusivamente JSON válido."
                 ),
-                user_prompt=self._prompt(evidence, limit),
+                user_prompt=self._prompt(evidence, limit, existing_artifacts or []),
             )
             records = payload.get("artifacts", []) if isinstance(payload, dict) else payload
             if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
                 raise RuntimeError(f"{self.contract.agent_id} no devolvió la colección 'artifacts' esperada.")
+
+        if hasattr(self.client, "get_last_telemetry"):
+            self.last_telemetry = self.client.get_last_telemetry()
+
         artifacts = [
             Artifact.from_dict(self._normalize_record(item, index), self.contract.artifact_type, index)
             for index, item in enumerate(records[:limit], start=1)
@@ -130,7 +139,12 @@ class SpecializedGenerationAgent:
         normalized["artifact_id"] = f"{self.contract.artifact_type}-{index:03d}"
         return normalized
 
-    def _prompt(self, evidence: list[tuple[Fragment, float]], limit: int) -> str:
+    def _prompt(
+        self,
+        evidence: list[tuple[Fragment, float]],
+        limit: int,
+        existing_artifacts: list[Artifact],
+    ) -> str:
         context = "\n\n".join(
             f"[{fragment.fragment_id}] {fragment.heading}\n{fragment.text}" for fragment, _ in evidence
         )
@@ -144,6 +158,32 @@ class SpecializedGenerationAgent:
             "acceptance_criteria": ["Criterio verificable; obligatorio para HU"],
         }
         rules = "\n".join(f"- {rule}" for rule in self.contract.quality_rules)
+
+        coherence_section = ""
+        if existing_artifacts:
+            summary_lines = [
+                f"- [{a.artifact_id} ({a.artifact_type})] {a.title}: {a.description}"
+                for a in existing_artifacts[:25]
+            ]
+            coherence_guide = ""
+            if self.contract.artifact_type == "HU":
+                coherence_guide = (
+                    "Alinea las Historias de Usuario con las capacidades de los Requisitos Funcionales anteriores. "
+                    "Expresa la perspectiva de valor del actor sin duplicar literalmente el texto del RF."
+                )
+            elif self.contract.artifact_type == "RNF":
+                coherence_guide = (
+                    "Formula atributos de calidad, rendimiento o seguridad que apliquen sobre las funciones anteriores, "
+                    "sin redactar comportamientos funcionales."
+                )
+            else:
+                coherence_guide = "Mantén consistencia y evita duplicar o contradecir los artefactos existentes."
+
+            coherence_section = f"""
+Artefactos del proyecto ya identificados (mantener coherencia con ellos):
+{coherence_guide}
+""" + "\n".join(summary_lines) + "\n"
+
         return f"""Proyecto: {self.project_name}
 Dominio: {self.domain}
 Tarea exclusiva del agente: {self.contract.task}
@@ -158,9 +198,10 @@ Reglas comunes:
 - Si falta información, conserva la incertidumbre y usa el estado 'requiere aclaración'.
 - No resuelvas contradicciones mediante suposiciones.
 - Devuelve {{"artifacts": [...]}} usando este esquema: {json.dumps(schema, ensure_ascii=False)}
-
+{coherence_section}
 Evidencia recuperada:
 {context}"""
+
 
 
 

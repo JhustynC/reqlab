@@ -687,8 +687,27 @@ class SQLiteRepository:
             )
         return run_id
 
-    def finish_run(self, run_id: str, status: str, error_message: str | None = None) -> None:
+    def finish_run(
+        self,
+        run_id: str,
+        status: str,
+        error_message: str | None = None,
+        metrics: dict[str, Any] | None = None,
+    ) -> None:
         with self.connection() as connection:
+            if metrics:
+                row = connection.execute("SELECT parameters_json FROM runs WHERE id = ?", (run_id,)).fetchone()
+                if row:
+                    try:
+                        params = json.loads(row[0] or "{}")
+                    except Exception:
+                        params = {}
+                    params["metrics"] = metrics
+                    connection.execute(
+                        "UPDATE runs SET status = ?, error_message = ?, finished_at = ?, parameters_json = ? WHERE id = ?",
+                        (status, error_message, utc_now(), json.dumps(params, ensure_ascii=False), run_id),
+                    )
+                    return
             connection.execute(
                 "UPDATE runs SET status = ?, error_message = ?, finished_at = ? WHERE id = ?",
                 (status, error_message, utc_now(), run_id),
