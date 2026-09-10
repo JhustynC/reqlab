@@ -82,7 +82,7 @@ class DocumentExtractionService:
 
 
 class TextSegmentationService:
-    """Segmenta por párrafos con tamaño y solapamiento configurables."""
+    """Segmenta por estructura del documento con tamaño y solapamiento configurables."""
 
     def __init__(self, chunk_size: int = 1200, overlap: int = 180):
         if chunk_size < 300:
@@ -92,44 +92,102 @@ class TextSegmentationService:
         self.chunk_size = chunk_size
         self.overlap = overlap
 
-    def segment(self, text: str, source_code: str, source_file: str) -> list[Fragment]:
-        paragraphs = [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
-        chunks: list[str] = []
-        current = ""
-        for paragraph in paragraphs:
-            if len(paragraph) > self.chunk_size:
-                if current:
-                    chunks.append(current.strip())
-                    current = ""
-                chunks.extend(self._split_long_text(paragraph))
-                continue
-            candidate = f"{current}\n\n{paragraph}".strip()
-            if current and len(candidate) > self.chunk_size:
-                chunks.append(current.strip())
-                prefix = current[-self.overlap :].strip() if self.overlap else ""
-                current = f"{prefix}\n\n{paragraph}".strip()
-            else:
-                current = candidate
-        if current:
-            chunks.append(current.strip())
+    def segment(
+        self,
+        text: str,
+        source_code: str,
+        source_file: str,
+        source_kind: str = "document",
+    ) -> list[Fragment]:
+        units = self._structural_units(text, source_kind)
+        chunks = self._merge_units(units)
         return [
             Fragment(
                 fragment_id=f"{source_code}-F{index:03d}",
                 source_id=source_code,
                 source_file=source_file,
-                heading=self._heading(chunk, index),
+                heading=self._heading(chunk, index, source_kind),
                 text=chunk,
             )
             for index, chunk in enumerate(chunks, start=1)
         ]
 
-    def _split_long_text(self, text: str) -> list[str]:
-        step = self.chunk_size - self.overlap
-        return [text[start : start + self.chunk_size].strip() for start in range(0, len(text), step) if text[start : start + self.chunk_size].strip()]
+    def _structural_units(self, text: str, source_kind: str) -> list[str]:
+        if source_kind == "email":
+            return self._split_email(text)
+        if source_kind == "interview":
+            return self._split_interview(text)
+        if source_kind == "conversation":
+            return self._split_conversation(text)
+        if source_kind in {"meeting_notes", "note"}:
+            return self._split_markdown_sections(text)
+        return [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
 
     @staticmethod
-    def _heading(chunk: str, index: int) -> str:
+    def _split_email(text: str) -> list[str]:
+        headers = re.split(
+            r"(?=^(?:De|Para|Asunto|Subject|From|To|Date|Fecha)\s*:)",
+            text,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+        return [part.strip() for part in headers if part.strip()]
+
+    @staticmethod
+    def _split_interview(text: str) -> list[str]:
+        parts = re.split(
+            r"(?=^(?:Entrevistador|Entrevistado|Entrevistadora|Pregunta|Respuesta|Q|A)\s*:)",
+            text,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+        units = [part.strip() for part in parts if part.strip()]
+        return units or [text.strip()]
+
+    @staticmethod
+    def _split_conversation(text: str) -> list[str]:
+        parts = re.split(r"(?=^[A-Za-zÁÉÍÓÚáéíóú0-9 _-]{2,40}:\s)", text, flags=re.MULTILINE)
+        units = [part.strip() for part in parts if part.strip()]
+        return units or [text.strip()]
+
+    @staticmethod
+    def _split_markdown_sections(text: str) -> list[str]:
+        parts = re.split(r"(?=^#{1,3}\s+.+$)", text, flags=re.MULTILINE)
+        units = [part.strip() for part in parts if part.strip()]
+        return units or [part.strip() for part in re.split(r"\n\s*\n", text) if part.strip()]
+
+    def _merge_units(self, units: list[str]) -> list[str]:
+        chunks: list[str] = []
+        current = ""
+        for unit in units:
+            if len(unit) > self.chunk_size:
+                if current:
+                    chunks.append(current.strip())
+                    current = ""
+                chunks.extend(self._split_long_text(unit))
+                continue
+            candidate = f"{current}\n\n{unit}".strip()
+            if current and len(candidate) > self.chunk_size:
+                chunks.append(current.strip())
+                prefix = current[-self.overlap :].strip() if self.overlap else ""
+                current = f"{prefix}\n\n{unit}".strip()
+            else:
+                current = candidate
+        if current:
+            chunks.append(current.strip())
+        return chunks
+
+    def _split_long_text(self, text: str) -> list[str]:
+        step = self.chunk_size - self.overlap
+        return [
+            text[start : start + self.chunk_size].strip()
+            for start in range(0, len(text), step)
+            if text[start : start + self.chunk_size].strip()
+        ]
+
+    @staticmethod
+    def _heading(chunk: str, index: int, source_kind: str) -> str:
         first_line = chunk.splitlines()[0].strip().lstrip("# ")
+        if source_kind == "email" and re.match(r"^(De|Para|Asunto|Subject)\s*:", first_line, re.IGNORECASE):
+            return first_line[:100]
         if len(first_line) <= 100:
             return first_line
         return f"Fragmento {index}"
@@ -141,4 +199,3 @@ def safe_filename(filename: str) -> str:
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(name).stem).strip("._") or "fuente"
     suffix = Path(name).suffix.lower()
     return f"{stem}{suffix}"
-

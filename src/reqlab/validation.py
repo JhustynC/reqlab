@@ -34,6 +34,7 @@ class TraceabilityConsistencyAgent:
             "artifacts_without_citations": missing_citations,
             "invalid_citations": invalid_citations,
             "possible_duplicates": self._duplicates(artifacts),
+            "cross_type_duplicates": self._cross_type_duplicates(artifacts),
             "ambiguities_detected": self._ambiguities(artifacts, ambiguity_registry or []),
             "user_stories_with_invalid_format": malformed_stories,
             "user_stories_without_acceptance_criteria": stories_without_criteria,
@@ -82,11 +83,43 @@ class TraceabilityConsistencyAgent:
             if not left_terms:
                 continue
             for right in artifacts[index + 1 :]:
+                if left.artifact_type != right.artifact_type:
+                    continue
                 right_terms = set(tokenize(right.description))
                 union = left_terms | right_terms
                 similarity = len(left_terms & right_terms) / len(union) if union else 0.0
                 if similarity >= 0.72:
                     duplicates.append({"left": left.artifact_id, "right": right.artifact_id, "jaccard": round(similarity, 3)})
+        return duplicates
+
+    @staticmethod
+    def _cross_type_duplicates(artifacts: list[Artifact]) -> list[dict]:
+        """Detecta artefactos de *tipos distintos* con alta superposición léxica.
+
+        Un umbral más bajo (0.55) que el de duplicados internos porque la coincidencia
+        entre, p. ej., un RF y una HU no implica error sino posible redundancia; el
+        experto decide si consolidar, reclasificar o mantener ambos con distintos enfoques.
+        """
+        duplicates: list[dict] = []
+        for index, left in enumerate(artifacts):
+            left_terms = set(tokenize(left.description))
+            if not left_terms:
+                continue
+            for right in artifacts[index + 1 :]:
+                if left.artifact_type == right.artifact_type:
+                    continue
+                right_terms = set(tokenize(right.description))
+                union = left_terms | right_terms
+                similarity = len(left_terms & right_terms) / len(union) if union else 0.0
+                if similarity >= 0.55:
+                    duplicates.append({
+                        "left": left.artifact_id,
+                        "left_type": left.artifact_type,
+                        "right": right.artifact_id,
+                        "right_type": right.artifact_type,
+                        "jaccard": round(similarity, 3),
+                        "reason": "Superposición léxica entre tipos distintos; revisar si son complementarios o redundantes.",
+                    })
         return duplicates
 
     @staticmethod

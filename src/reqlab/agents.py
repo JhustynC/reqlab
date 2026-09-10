@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .llm import DeepSeekClient
+from .llm import LLMClient
 from .models import Artifact, Fragment
 
 
@@ -19,6 +19,7 @@ class AgentContract:
     artifact_type: str
     task: str
     quality_rules: tuple[str, ...]
+    retrieval_query: str = ""
 
 
 CONTRACTS = {
@@ -32,6 +33,10 @@ CONTRACTS = {
             "Separar capacidades distintas y evitar decisiones de diseño no sustentadas.",
             "No clasificar atributos de calidad como funciones.",
         ),
+        retrieval_query=(
+            "capacidades funcionales procesos acciones comportamientos observables "
+            "el sistema debe permitir registrar consultar modificar gestionar"
+        ),
     ),
     "RNF": AgentContract(
         "agent.rnf",
@@ -42,6 +47,10 @@ CONTRACTS = {
             "No convertir funciones del negocio en requisitos no funcionales.",
             "Conservar las métricas explícitas de las fuentes; no inventar umbrales.",
             "Marcar como pendiente cualquier atributo que no pueda verificarse con la información disponible.",
+        ),
+        retrieval_query=(
+            "rendimiento tiempo respuesta disponibilidad seguridad autenticación "
+            "cifrado retención datos usabilidad escalabilidad restricción normativa legal"
         ),
     ),
     "HU": AgentContract(
@@ -54,8 +63,13 @@ CONTRACTS = {
             "Añadir criterios de aceptación concretos y trazables.",
             "No inventar actores ni beneficios ausentes de las fuentes o de la definición confirmada.",
         ),
+        retrieval_query=(
+            "actor usuario rol administrador cliente empleado necesita quiere beneficio "
+            "escenario flujo interacción objetivo valor"
+        ),
     ),
 }
+
 
 
 class SpecializedGenerationAgent:
@@ -65,7 +79,7 @@ class SpecializedGenerationAgent:
         self,
         contract: AgentContract,
         retriever: Retriever,
-        client: DeepSeekClient,
+        client: LLMClient,
         project_name: str,
         domain: str,
     ):
@@ -76,20 +90,35 @@ class SpecializedGenerationAgent:
         self.domain = domain or "dominio descrito por las fuentes"
 
     def generate(self, limit: int = 15) -> tuple[list[Artifact], list[tuple[Fragment, float]]]:
-        query = f"{self.project_name} {self.domain} {self.contract.task}"
+        # Construir query enriquecida: nombre + dominio + tarea genérica + términos especializados del tipo
+        specialized = self.contract.retrieval_query or self.contract.task
+        query = f"{self.project_name} {self.domain} {specialized}"
         evidence = self.retriever.retrieve(query, top_k=24)
         if not evidence:
             raise RuntimeError(f"{self.contract.agent_id} no recuperó evidencia suficiente para generar artefactos.")
-        payload = self.client.complete_json(
-            system_prompt=(
-                f"Actúas como {self.contract.role}. Trabajas únicamente con evidencia citada. "
-                "Responde en español y devuelve exclusivamente JSON válido."
-            ),
-            user_prompt=self._prompt(evidence, limit),
-        )
-        records = payload.get("artifacts", []) if isinstance(payload, dict) else payload
-        if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
-            raise RuntimeError(f"{self.contract.agent_id} no devolvió la colección 'artifacts' esperada.")
+        try:
+            from .llm_schemas import ArtifactsResponse
+            response = self.client.complete_json_validated(  # type: ignore[union-attr]
+                system_prompt=(
+                    f"Actúas como {self.contract.role}. Trabajas únicamente con evidencia citada. "
+                    "Responde en español y devuelve exclusivamente JSON válido."
+                ),
+                user_prompt=self._prompt(evidence, limit),
+                schema=ArtifactsResponse,
+            )
+            records = [record.model_dump() for record in response.artifacts]
+        except (AttributeError, RuntimeError):
+            # Fallback: el cliente no implementa complete_json_validated (p. ej. mock en tests)
+            payload = self.client.complete_json(
+                system_prompt=(
+                    f"Actúas como {self.contract.role}. Trabajas únicamente con evidencia citada. "
+                    "Responde en español y devuelve exclusivamente JSON válido."
+                ),
+                user_prompt=self._prompt(evidence, limit),
+            )
+            records = payload.get("artifacts", []) if isinstance(payload, dict) else payload
+            if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
+                raise RuntimeError(f"{self.contract.agent_id} no devolvió la colección 'artifacts' esperada.")
         artifacts = [
             Artifact.from_dict(self._normalize_record(item, index), self.contract.artifact_type, index)
             for index, item in enumerate(records[:limit], start=1)
@@ -132,6 +161,7 @@ Reglas comunes:
 
 Evidencia recuperada:
 {context}"""
+
 
 
 class ProjectDefinitionAgent:
@@ -190,7 +220,7 @@ class ProjectDefinitionAgent:
         },
     )
 
-    def __init__(self, client: DeepSeekClient, batch_character_limit: int = 18000):
+    def __init__(self, client: LLMClient, batch_character_limit: int = 18000):
         self.client = client
         self.batch_character_limit = batch_character_limit
 
@@ -393,7 +423,7 @@ Resúmenes obtenidos al recorrer el corpus:
 class RevisionAgent:
     """Propone una nueva versión sin sobrescribir el artefacto vigente."""
 
-    def __init__(self, client: DeepSeekClient, retriever: Retriever):
+    def __init__(self, client: LLMClient, retriever: Retriever):
         self.client = client
         self.retriever = retriever
 

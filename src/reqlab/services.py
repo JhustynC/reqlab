@@ -10,6 +10,7 @@ from .agents import ProjectDefinitionAgent, RevisionAgent, SpecializedGeneration
 from .documents import DocumentExtractionService, TextSegmentationService, safe_filename
 from .llm import DeepSeekClient
 from .models import Artifact
+from .settings import Settings
 from .storage import SQLiteRepository
 from .validation import TraceabilityConsistencyAgent
 from .vector_store import ChromaProjectVectorStore, HybridRetrievalAgent
@@ -24,14 +25,18 @@ class ProjectApplicationService:
         vector_store: ChromaProjectVectorStore,
         data_dir: str | Path,
         client: DeepSeekClient,
+        settings: Settings | None = None,
     ):
         self.repository = repository
         self.vector_store = vector_store
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.client = client
+        self.settings = settings
+        chunk_size = settings.chunk_size if settings else 1200
+        chunk_overlap = settings.chunk_overlap if settings else 180
         self.extractor = DocumentExtractionService()
-        self.segmenter = TextSegmentationService()
+        self.segmenter = TextSegmentationService(chunk_size=chunk_size, overlap=chunk_overlap)
         self.definition_agent = ProjectDefinitionAgent(client)
 
     def create_project(self, name: str, description: str = "", domain: str = "") -> dict[str, Any]:
@@ -230,7 +235,13 @@ class ProjectApplicationService:
         fragments = self.repository.list_fragments(project_id)
         if not fragments:
             raise ValueError("El proyecto no contiene fragmentos indexados.")
-        retriever = HybridRetrievalAgent(project_id, fragments, self.vector_store)
+        retriever = HybridRetrievalAgent(
+            project_id,
+            fragments,
+            self.vector_store,
+            lexical_weight=self.settings.rrf_lexical_weight if self.settings else 0.45,
+            semantic_weight=self.settings.rrf_semantic_weight if self.settings else 0.55,
+        )
         artifacts: list[Artifact] = []
         retrieval_log: dict[str, list[dict[str, Any]]] = {}
         parent_run = run_id or self.repository.start_run(
