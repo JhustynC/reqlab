@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ProjectCreate(BaseModel):
@@ -31,8 +31,34 @@ class DefinitionAnswersUpdate(BaseModel):
     answers: list[DefinitionAnswer]
 
 
+class GenerationLimits(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    rf: int = Field(alias="RF", ge=1, le=30)
+    rnf: int = Field(alias="RNF", ge=1, le=30)
+    hu: int = Field(alias="HU", ge=1, le=30)
+
+    def as_dict(self) -> dict[str, int]:
+        return {"RF": self.rf, "RNF": self.rnf, "HU": self.hu}
+
+
 class GenerationRequest(BaseModel):
-    limit_per_type: int = Field(default=12, ge=3, le=20)
+    limits: GenerationLimits | None = None
+    # Campo legado para clientes anteriores. Si se envía, aplica el mismo tope
+    # a los tres tipos; la nueva interfaz utiliza limits.
+    limit_per_type: int | None = Field(default=None, ge=1, le=30)
+
+    @model_validator(mode="after")
+    def reject_ambiguous_payload(self) -> "GenerationRequest":
+        if self.limits is not None and self.limit_per_type is not None:
+            raise ValueError("Envíe limits por tipo o limit_per_type, no ambos.")
+        return self
+
+    def resolved_limits(self) -> dict[str, int]:
+        if self.limits is not None:
+            return self.limits.as_dict()
+        fallback = self.limit_per_type if self.limit_per_type is not None else 12
+        return {"RF": fallback, "RNF": fallback, "HU": fallback}
 
 
 class ArtifactUpdate(BaseModel):
@@ -42,6 +68,7 @@ class ArtifactUpdate(BaseModel):
     status: str = Field(pattern="^(propuesto|requiere aclaración|aceptado|rechazado)$")
     source_fragments: list[str]
     acceptance_criteria: list[str] = Field(default_factory=list)
+    related_artifacts: list[str] | None = None
 
 
 class RevisionRequest(BaseModel):

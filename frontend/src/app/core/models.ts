@@ -99,6 +99,11 @@ export interface Artifact {
   source_fragments: string[];
   status: 'propuesto' | 'requiere aclaración' | 'aceptado' | 'rechazado';
   acceptance_criteria: string[];
+  related_artifacts: string[];
+  validation: {
+    status?: 'sin_alertas' | 'requiere_revision';
+    warnings?: string[];
+  };
   version: number;
   created_at: string;
   updated_at: string;
@@ -117,6 +122,19 @@ export interface GenerationRun {
     step?: string;
     model?: string;
     retrieval?: string;
+    experimental_config?: {
+      llm?: { model?: string; base_url?: string };
+      embedding?: { model?: string };
+      reranker?: { enabled?: boolean; model?: string };
+      retrieval?: { method?: string; top_k?: number };
+      segmentation?: { chunk_size?: number; overlap?: number };
+      prompt_version?: string;
+    };
+    metrics?: {
+      total_latency_ms?: number;
+      total_tokens?: number;
+      total_attempts?: number;
+    };
   };
 }
 
@@ -135,6 +153,7 @@ export interface RevisionProposal {
     source_fragments: string[];
     status: string;
     acceptance_criteria: string[];
+    related_artifacts: string[];
   };
 }
 
@@ -143,9 +162,20 @@ export interface ValidationReport {
   artifacts_without_citations: string[];
   invalid_citations: Record<string, string[]>;
   possible_duplicates: Array<{ left: string; right: string; jaccard: number }>;
+  cross_type_duplicates: Array<{
+    left: string;
+    right: string;
+    left_type: string;
+    right_type: string;
+    jaccard: number;
+    reason: string;
+  }>;
+  invalid_relations: Record<string, string[]>;
   user_stories_with_invalid_format: string[];
   user_stories_without_acceptance_criteria: string[];
   taxonomy_warnings: Array<{ artifact_id: string; reason: string }>;
+  artifact_validations: Record<string, { status: string; warnings: string[] }>;
+  thresholds: { same_type_jaccard: number; cross_type_jaccard: number };
   traceability_status: string;
   quality_status: string;
 }

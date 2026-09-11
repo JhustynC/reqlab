@@ -27,6 +27,7 @@ class Artifact:
     source_fragments: list[str]
     status: str = "propuesto"
     acceptance_criteria: list[str] | None = None
+    related_artifacts: list[str] | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], artifact_type: str, index: int) -> "Artifact":
@@ -36,6 +37,9 @@ class Artifact:
         criteria = data.get("acceptance_criteria")
         if isinstance(criteria, str):
             criteria = [criteria]
+        relations = data.get("related_artifacts", [])
+        if isinstance(relations, str):
+            relations = [relations]
         prefix = {"RF": "RF", "RNF": "RNF", "HU": "HU"}[artifact_type]
         return cls(
             artifact_id=str(data.get("artifact_id") or f"{prefix}-{index:03d}"),
@@ -46,8 +50,8 @@ class Artifact:
             source_fragments=[str(item) for item in citations],
             status=str(data.get("status") or "propuesto"),
             acceptance_criteria=criteria,
+            related_artifacts=[str(item) for item in relations],
         )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-

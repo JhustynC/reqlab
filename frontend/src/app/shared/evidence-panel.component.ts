@@ -65,6 +65,16 @@ import { IconComponent } from './icon.component';
           </div>
           <h3 class="detail-title">{{ artifact.title }}</h3>
           <p class="stage-desc">{{ artifact.description }}</p>
+          @if (artifact.validation?.warnings?.length) {
+            <div class="artifact-validation">
+              <strong><app-icon name="warning" /> Aspectos por revisar</strong>
+              @for (warning of artifact.validation.warnings ?? []; track warning) {
+                <p>{{ warning }}</p>
+              }
+            </div>
+          } @else {
+            <div class="artifact-validation ok"><strong><app-icon name="check" /> Sin alertas estructurales</strong></div>
+          }
           <div class="evidence-label">RESPALDADO POR</div>
           <div class="row wrap small-gap" style="gap:6px">
             @for (citation of artifact.source_fragments; track citation) {
@@ -73,6 +83,14 @@ import { IconComponent } from './icon.component';
               </button>
             }
           </div>
+          @if (artifact.related_artifacts.length) {
+            <div class="evidence-label">RELACIONADO CON</div>
+            <div class="row wrap small-gap" style="gap:6px">
+              @for (relation of artifact.related_artifacts; track relation) {
+                <button class="relation" type="button" (click)="selectRelated(relation)">{{ relation }}</button>
+              }
+            </div>
+          }
           <hr class="divider" />
           <label class="form-label" for="artifact-status">Decisión del analista</label>
           <select
@@ -344,6 +362,10 @@ export class EvidencePanelComponent {
       (report?.artifacts_without_citations.length ?? 0) +
       Object.values(report?.invalid_citations ?? {}).reduce((sum, items) => sum + items.length, 0) +
       (report?.possible_duplicates.length ?? 0) +
+      (report?.cross_type_duplicates?.length ?? 0) +
+      Object.values(report?.invalid_relations ?? {}).reduce((sum, items) => sum + items.length, 0) +
+      (report?.user_stories_with_invalid_format?.length ?? 0) +
+      (report?.user_stories_without_acceptance_criteria?.length ?? 0) +
       (report?.taxonomy_warnings.length ?? 0)
     );
   }
@@ -368,6 +390,10 @@ export class EvidencePanelComponent {
   closeDetail(): void {
     if (this.store.selectedFragment() && this.store.selectedArtifact()) this.store.clearEvidence();
     else this.store.clearDetail();
+  }
+  selectRelated(artifactKey: string): void {
+    const artifact = this.store.artifacts().find((item) => item.artifact_key === artifactKey);
+    if (artifact) this.store.selectArtifact(artifact);
   }
   beginEdit(artifact: Artifact): void {
     this.draft = { title: artifact.title, description: artifact.description };

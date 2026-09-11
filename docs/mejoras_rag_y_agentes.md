@@ -1,6 +1,23 @@
 # ReqLab: Reporte Consolidado de Mejoras RAG y Arquitectura Multi-Agente
 
-Este documento detalla **todas las mejoras implementadas** en la rama `feature/rag-and-agent-improvements`, explicando **qué** se hizo, **cómo** se implementó y **por qué** (justificación técnica y académica para la tesis), garantizando la compatibilidad total con el frontend Angular existente.
+Este documento detalla las mejoras implementadas en la rama `feature/rag-and-agent-improvements`, su justificación y las extensiones realizadas en Angular. Los contratos existentes se conservaron y los campos nuevos son aditivos.
+
+## Resultado de la auditoría técnica
+
+| Hallazgo original | Corrección aplicada | Verificación |
+|---|---|---|
+| El tipo de fuente no llegaba al segmentador | `source_kind` se transmite desde la ingesta | Prueba con segmentación de correo |
+| Una consulta E5 recibía `passage: query:` | Consulta y pasaje se codifican por rutas separadas | Prueba de prefijos asimétricos |
+| El reranker estaba creado pero desconectado | Se inyecta en todos los recuperadores del servicio | Prueba de composición del servicio |
+| `RETRIEVAL_TOP_K` era ignorado | El valor configurado llega al agente generador | Prueba con top-k controlado |
+| La indexación incremental no se utilizaba | Ingesta, eliminación y definición usan upsert/delete selectivo | Pruebas del flujo persistente |
+| Un fallo de Pydantic activaba una llamada sin validar | El fallback solo existe para clientes que carecen del método validado | Prueba de fallo sin bypass |
+| Los reintentos duplicaban latencia y tokens | Acumulación única por intento y telemetría aislada por contexto | Prueba exacta de dos intentos |
+| Un cambio de modelo podía mezclar dimensiones vectoriales | Colección versionada por modelo y prefijos | Nombre de colección determinista |
+| Esquemas débiles y revisión no validada | Prioridades/estados estrictos, citas y relaciones controladas, HU con criterios | Esquemas Pydantic y pruebas de flujo |
+| La configuración se perdía al cambiar `.env` | Instantánea completa persistida en cada ejecución | Vista “Ejecución” y exportación |
+| Los umbrales parecían valores universales | Son configurables y se presentan como heurísticos | Reporte incluye los umbrales usados |
+| El frontend no mostraba los nuevos datos | Se añadieron relaciones, alertas por artefacto y ejecución | Compilación de producción Angular |
 
 ---
 
@@ -12,7 +29,7 @@ Este documento detalla **todas las mejoras implementadas** en la rama `feature/r
 - Se preservó el alias retrocompatible `DeepSeekClient = OpenAICompatibleClient`.
 
 ### ¿Por qué?
-1. **Flexibilidad de Proveedor:** Permite utilizar cualquier proveedor compatible con OpenAI Chat Completions (Groq, Together, OpenRouter, Azure OpenAI, Ollama local o DeepSeek) simplemente cambiando variables de entorno en el `.env`, sin modificar una sola línea de código Python.
+1. **Flexibilidad de proveedor:** El cliente funciona con servicios que implementen Chat Completions, autenticación Bearer y salida JSON de forma compatible. DeepSeek es el proveedor validado; Azure OpenAI, Ollama u otros servicios pueden requerir adaptadores específicos.
 2. **Robustez y Tolerancia a Fallos:** Los LLMs ocasionalmente devuelven JSON con claves faltantes o tipos incorrectos. Con Pydantic y reintentos guiados por el error exacto, el agente corrige automáticamente su respuesta si el primer intento no cumple el contrato.
 
 ---
@@ -25,7 +42,7 @@ Este documento detalla **todas las mejoras implementadas** en la rama `feature/r
 - Se implementó la factoría `ChromaProjectVectorStore.from_settings()`.
 
 ### ¿Por qué?
-1. **Calidad de Recuperación:** El modelo base anterior (`MiniLM`) es rápido pero limitado en español técnico. Modelos como `intfloat/multilingual-e5-base` o `BAAI/bge-m3` ofrecen un *retrieval* semántico superior para requisitos de software.
+1. **Capacidad de experimentación:** El modelo base es rápido; modelos como `intfloat/multilingual-e5-base` o `BAAI/bge-m3` son alternativas multilingües cuya calidad deberá compararse con el corpus y las métricas del experimento.
 2. **Requisitos de Embeddings Modernos:** Modelos como E5 requieren explícitamente diferenciar si el vector corresponde a una consulta de búsqueda o a un pasaje documental para calcular similitudes de coseno precisas.
 
 ---
@@ -34,7 +51,7 @@ Este documento detalla **todas las mejoras implementadas** en la rama `feature/r
 
 ### ¿Qué se hizo?
 - Se creó la clase `CrossEncoderReranker` en `src/reqlab/vector_store.py`.
-- Se integró de manera opcional en `HybridRetrievalAgent`, activable mediante las variables `RERANKER_ENABLED=True` y `RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2`.
+- Se integró de manera opcional en el servicio de aplicación, activable mediante `RERANKER_ENABLED=True`. La configuración de ejemplo utiliza un modelo mMARCO multilingüe apto para español.
 
 ### ¿Por qué?
 1. **Arquitectura RAG en Dos Etapas (Retrieve & Rerank):**
@@ -48,7 +65,8 @@ Este documento detalla **todas las mejoras implementadas** en la rama `feature/r
 
 ### ¿Qué se hizo?
 - Se crearon los métodos `upsert_fragments()` y `delete_fragments()` en `ChromaProjectVectorStore`.
-- Se añadió el flag `full_rebuild: bool = True` al método `index()`.
+- La ingesta, eliminación y confirmación de la definición utilizan las operaciones incrementales. Una reconstrucción completa queda disponible para mantenimiento explícito.
+- El índice se versiona por modelo y prefijos de embeddings, evitando mezclar vectores de dimensiones incompatibles.
 
 ### ¿Por qué?
 1. **Eficiencia en Ingesta:** Anteriormente, ante cualquier cambio o agregado de una fuente, se eliminaba toda la colección de ChromaDB y se re-computaban los embeddings de todo el proyecto.
@@ -82,7 +100,7 @@ Este documento detalla **todas las mejoras implementadas** en la rama `feature/r
   - **HU:** *actor, usuario, rol, administrador, cliente, necesidad, beneficio, escenario, interacción, valor.*
 
 ### ¿Por qué?
-- Anteriormente todos los agentes consultaban al RAG casi con la misma frase genérica (`{proyecto} {dominio} {tarea}`). Al especializar la consulta léxica y semántica, el agente de RNF recupera fragmentos de seguridad y desempeño, mientras que el agente de HU recupera interacciones y actores humanos.
+- Anteriormente todos los agentes consultaban al RAG casi con la misma frase genérica (`{proyecto} {dominio} {tarea}`). La especialización busca favorecer evidencia pertinente para cada tipo, pero su efecto debe comprobarse mediante evaluación; el vocabulario se registra como parámetro experimental y no como garantía de mejora.
 
 ---
 
@@ -95,7 +113,8 @@ Este documento detalla **todas las mejoras implementadas** en la rama `feature/r
   - El agente **RNF** recibe los RFs para formular restricciones y atributos de calidad medibles que apliquen a esas capacidades.
 
 ### ¿Por qué?
-- Evita que los agentes trabajen como "islas". Resuelve de raíz las contradicciones entre lo que promete una Historia de Usuario y lo que estipula un Requisito Funcional, elevando la calidad del conjunto de requisitos.
+- Reduce el aislamiento entre agentes y proporciona contexto explícito para revisar coherencia. No garantiza ausencia de contradicciones: la validación automática y el juicio experto siguen siendo necesarios.
+- Los artefactos generados se distinguen de la evidencia documental y se enlazan mediante `related_artifacts`; nunca se aceptan como citas de fuente.
 
 ---
 
@@ -107,7 +126,7 @@ Este documento detalla **todas las mejoras implementadas** en la rama `feature/r
 - El reporte de validación incluye ahora `cross_type_duplicates` detallando `left_type`, `right_type`, índice de similitud y motivo.
 
 ### ¿Por qué?
-- Mientras que dos RF idénticos representan un error claro de duplicación, una similitud alta entre un RF y una HU suele indicar una redacción redundante donde la historia de usuario no aportó perspectiva de actor ni criterio de aceptación nuevo. Esta métrica asiste al analista humano en la revisión.
+- Una similitud alta es una alerta heurística, no una decisión automática. Los umbrales son configurables y deben calibrarse con el caso de evaluación; la métrica únicamente asiste al analista humano.
 
 ---
 
@@ -133,15 +152,16 @@ Este documento detalla **todas las mejoras implementadas** en la rama `feature/r
 ## 10. Configuración Centralizada de Experimentos
 
 ### ¿Qué se hizo?
-- Se documentaron e implementaron todas las nuevas variables en `config.example.env` y `src/reqlab/settings.py`:
+- Se documentaron e implementaron las nuevas variables en `config.example.env` y `src/reqlab/settings.py`:
   - `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_MAX_RETRIES`
   - `EMBEDDING_MODEL`, `EMBEDDING_QUERY_PREFIX`, `EMBEDDING_PASSAGE_PREFIX`
   - `RERANKER_ENABLED`, `RERANKER_MODEL`
   - `RRF_LEXICAL_WEIGHT`, `RRF_SEMANTIC_WEIGHT`, `RETRIEVAL_TOP_K`
   - `CHUNK_SIZE`, `CHUNK_OVERLAP`
+  - `DUPLICATE_THRESHOLD`, `CROSS_TYPE_DUPLICATE_THRESHOLD`, `PROMPT_VERSION`
 
 ### ¿Por qué?
-- Facilita la reproducibilidad de experimentos científicos sin necesidad de alterar el código fuente.
+- Cada ejecución guarda una instantánea del modelo, embeddings, reranker, RRF, segmentación, umbrales y versión de prompts. Esto permite interpretar y repetir una ejecución aunque el `.env` cambie después.
 
 ---
 
@@ -150,7 +170,10 @@ Este documento detalla **todas las mejoras implementadas** en la rama `feature/r
 | Endpoint / Contrato | ¿Hubo cambios que rompan Angular? | Observación |
 |---|---|---|
 | `POST /api/projects/{id}/generation` | **No** | Mismo payload de inicio y respuesta `202 Accepted`. |
-| `GET /api/projects/{id}/runs/{run_id}` | **No** | `parameters` mantiene `progress`, `message`, `step` y agrega `metrics` opcional que TypeScript tolera sin error. |
-| `GET /api/projects/{id}/artifacts` | **No** | Estructura de `Artifact` idéntica. |
-| `GET /api/projects/{id}/validation` | **No** | Agrega la clave opcional `cross_type_duplicates`. Los campos existentes se mantienen intactos. |
+| `GET /api/runs/{run_id}` | **No** | `parameters` mantiene `progress`, `message`, `step` y agrega configuración y métricas. |
+| `GET /api/projects/{id}/runs/latest` | Nuevo | Recupera la última ejecución principal para la vista de reproducibilidad. |
+| `GET /api/projects/{id}/artifacts` | **No** | Agrega `related_artifacts` y `validation`; conserva todos los campos previos. |
+| `GET /api/projects/{id}/validation` | **No** | Agrega relaciones inválidas, duplicados cruzados, umbrales y evaluación por artefacto. |
 | `POST /api/projects/{id}/sources` | **No** | Mismo contrato de subida y procesamiento. |
+
+Angular muestra ahora la procedencia documental, las relaciones RF–RNF–HU, las observaciones por artefacto y una síntesis de la configuración de la ejecución. Se conservaron la composición visual, los componentes y los estilos base de ReqLab.

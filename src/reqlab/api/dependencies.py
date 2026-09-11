@@ -56,4 +56,5 @@ def get_service() -> ProjectApplicationService:
         get_settings().data_dir,
         get_client(),
         settings=get_settings(),
+        reranker=get_reranker(),
     )

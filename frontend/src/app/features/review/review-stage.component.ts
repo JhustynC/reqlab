@@ -4,7 +4,7 @@ import { Artifact } from '../../core/models';
 import { WorkspaceStore } from '../../core/workspace.store';
 import { IconComponent } from '../../shared/icon.component';
 
-type ReviewTab = 'artifacts' | 'trace' | 'alerts';
+type ReviewTab = 'artifacts' | 'trace' | 'alerts' | 'run';
 type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
 
 @Component({
@@ -25,6 +25,9 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
           Trazabilidad</button
         ><button type="button" [class.active]="tab() === 'alerts'" (click)="tab.set('alerts')">
           Observaciones ({{ alertCount() }})
+        </button
+        ><button type="button" [class.active]="tab() === 'run'" (click)="tab.set('run')">
+          Ejecución
         </button>
       </div>
 
@@ -67,12 +70,23 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
             </div>
             <h3>{{ artifact.title }}</h3>
             <p>{{ artifact.description }}</p>
+            @if (artifact.validation?.status === 'requiere_revision') {
+              <div class="artifact-warning"><app-icon name="warning" /> Requiere revisión automática</div>
+            }
             @if (artifact.acceptance_criteria.length) {
               <ul class="criteria">
                 @for (criterion of artifact.acceptance_criteria; track criterion) {
                   <li>{{ criterion }}</li>
                 }
               </ul>
+            }
+            @if (artifact.related_artifacts.length) {
+              <div class="relation-row">
+                <small>Relacionado con</small>
+                @for (relation of artifact.related_artifacts; track relation) {
+                  <button type="button" class="relation" (click)="selectRelated(relation)">{{ relation }}</button>
+                }
+              </div>
             }
             <div class="artifact-bottom">
               <div class="row wrap" style="gap:5px">
@@ -110,6 +124,7 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
               <tr>
                 <th>Artefacto</th>
                 <th>Origen documental</th>
+                <th>Relaciones</th>
                 <th>Revisión</th>
               </tr>
             </thead>
@@ -138,13 +153,18 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
                       }
                     </div>
                   </td>
+                  <td>
+                    @for (relation of artifact.related_artifacts; track relation) {
+                      <button type="button" class="relation" (click)="selectRelated(relation)">{{ relation }}</button>
+                    } @empty { <span class="muted">—</span> }
+                  </td>
                   <td>{{ statusLabel(artifact.status) }}</td>
                 </tr>
               }
             </tbody>
           </table>
         </div>
-      } @else {
+      } @else if (tab() === 'alerts') {
         <div class="row between">
           <small class="muted">{{ alertCount() }} observaciones automáticas</small
           ><span class="pill amber">Revisión humana</span>
@@ -197,6 +217,54 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
             </p>
           </article>
         }
+        @if ((store.validation()?.cross_type_duplicates?.length ?? 0) > 0) {
+          <article class="alert-card">
+            <span class="pill amber">Relación entre tipos</span>
+            <h3>Posible solapamiento entre RF, RNF o HU</h3>
+            <p>
+              @for (item of store.validation()?.cross_type_duplicates ?? []; track item.left + item.right) {
+                {{ item.left }} / {{ item.right }} · {{ (item.jaccard * 100).toFixed(0) }}%<br />
+              }
+            </p>
+          </article>
+        }
+        @if (invalidRelations().length) {
+          <article class="alert-card">
+            <span class="pill amber">Relación inválida</span>
+            <h3>Vínculos con artefactos inexistentes</h3>
+            <p>{{ invalidRelations().join(', ') }}</p>
+          </article>
+        }
+        @if ((store.validation()?.user_stories_with_invalid_format?.length ?? 0) > 0 || (store.validation()?.user_stories_without_acceptance_criteria?.length ?? 0) > 0) {
+          <article class="alert-card">
+            <span class="pill amber">Historias de usuario</span>
+            <h3>Historias que requieren ajuste estructural</h3>
+            <p>
+              Formato: {{ store.validation()?.user_stories_with_invalid_format?.join(', ') || 'ninguna' }}<br />
+              Sin criterios: {{ store.validation()?.user_stories_without_acceptance_criteria?.join(', ') || 'ninguna' }}
+            </p>
+          </article>
+        }
+      } @else {
+        @if (store.run(); as run) {
+          <div class="notice">
+            <app-icon name="check" />
+            <div><strong>Ejecución reproducible registrada</strong><br />La configuración queda asociada al resultado generado.</div>
+          </div>
+          <div class="run-summary gap">
+            <div><small>Modelo LLM</small><strong>{{ run.parameters.experimental_config?.llm?.model || run.parameters.model || 'No registrado' }}</strong></div>
+            <div><small>Embeddings</small><strong>{{ run.parameters.experimental_config?.embedding?.model || 'No registrado' }}</strong></div>
+            <div><small>Recuperación</small><strong>RRF · top {{ run.parameters.experimental_config?.retrieval?.top_k || '—' }}</strong></div>
+            <div><small>Reranking</small><strong>{{ run.parameters.experimental_config?.reranker?.enabled ? 'Activo' : 'Desactivado' }}</strong></div>
+            <div><small>Versión de prompts</small><strong>{{ run.parameters.experimental_config?.prompt_version || 'No registrada' }}</strong></div>
+            <div><small>Intentos LLM</small><strong>{{ run.parameters.metrics?.total_attempts || '—' }}</strong></div>
+            <div><small>Latencia LLM acumulada</small><strong>{{ formatLatency(run.parameters.metrics?.total_latency_ms) }}</strong></div>
+            <div><small>Tokens registrados</small><strong>{{ formatTokens(run.parameters.metrics?.total_tokens) }}</strong></div>
+          </div>
+          <p class="stage-desc">Estos datos documentan cómo se produjo esta salida; no sustituyen la evaluación de calidad por expertos.</p>
+        } @else {
+          <p class="empty-filter">Todavía no existe una ejecución registrada.</p>
+        }
       }
 
       <div class="stage-footer">
@@ -245,12 +313,21 @@ export class ReviewStageComponent implements OnInit {
       ([artifact, citations]) => citations.map((citation) => `${artifact}: ${citation}`),
     );
   }
+  invalidRelations(): string[] {
+    return Object.entries(this.store.validation()?.invalid_relations ?? {}).flatMap(
+      ([artifact, relations]) => relations.map((relation) => `${artifact}: ${relation}`),
+    );
+  }
   alertCount(): number {
     const report = this.store.validation();
     return (
       (report?.artifacts_without_citations.length ?? 0) +
       this.invalidCitations().length +
       (report?.possible_duplicates.length ?? 0) +
+      (report?.cross_type_duplicates?.length ?? 0) +
+      this.invalidRelations().length +
+      (report?.user_stories_with_invalid_format?.length ?? 0) +
+      (report?.user_stories_without_acceptance_criteria?.length ?? 0) +
       (report?.taxonomy_warnings.length ?? 0)
     );
   }
@@ -267,6 +344,16 @@ export class ReviewStageComponent implements OnInit {
   inspectCitation(artifact: Artifact, citation: string): void {
     this.store.selectedArtifact.set(artifact);
     void this.store.selectFragment(citation);
+  }
+  selectRelated(artifactKey: string): void {
+    const artifact = this.store.artifacts().find((item) => item.artifact_key === artifactKey);
+    if (artifact) this.store.selectArtifact(artifact);
+  }
+  formatLatency(value?: number): string {
+    return value == null ? '—' : `${(value / 1000).toFixed(1)} s`;
+  }
+  formatTokens(value?: number): string {
+    return value == null ? '—' : value.toLocaleString('es-EC');
   }
   openExport(): void {
     const project = this.store.project();

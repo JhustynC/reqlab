@@ -60,6 +60,15 @@ def build_docx(payload: dict[str, Any]) -> bytes:
             trace = document.add_paragraph()
             trace.add_run("Fuentes: ").bold = True
             trace.add_run(", ".join(item["source_fragments"]) or "Sin evidencia asociada")
+            if item.get("related_artifacts"):
+                relations = document.add_paragraph()
+                relations.add_run("Artefactos relacionados: ").bold = True
+                relations.add_run(", ".join(item["related_artifacts"]))
+            warnings = (item.get("validation") or {}).get("warnings", [])
+            if warnings:
+                document.add_paragraph("Observaciones automáticas:")
+                for warning in warnings:
+                    document.add_paragraph(str(warning), style="List Bullet")
             if item.get("acceptance_criteria"):
                 document.add_paragraph("Criterios de aceptación:")
                 for criterion in item["acceptance_criteria"]:
@@ -71,10 +80,28 @@ def build_docx(payload: dict[str, Any]) -> bytes:
         document.add_paragraph(f"Artefactos analizados: {validation.get('artifact_count', 0)}")
         document.add_paragraph(f"Estado de trazabilidad: {validation.get('traceability_status', 'no disponible')}")
         document.add_paragraph(f"Estado de calidad básica: {validation.get('quality_status', 'no disponible')}")
+        document.add_paragraph(
+            f"Posibles duplicados entre tipos: {len(validation.get('cross_type_duplicates', []))}"
+        )
     else:
         document.add_paragraph("No existe un reporte de validación almacenado.")
+
+    run = payload.get("generation_run") or {}
+    configuration = (run.get("parameters") or {}).get("experimental_config") or {}
+    if configuration:
+        document.add_heading("Configuración de la ejecución", level=1)
+        document.add_paragraph(
+            f"Modelo LLM: {(configuration.get('llm') or {}).get('model', 'No registrado')}"
+        )
+        document.add_paragraph(
+            f"Embeddings: {(configuration.get('embedding') or {}).get('model', 'No registrado')}"
+        )
+        retrieval = configuration.get("retrieval") or {}
+        document.add_paragraph(
+            f"Recuperación: {retrieval.get('method', 'No registrada')}; top-k: {retrieval.get('top_k', 'No registrado')}"
+        )
+        document.add_paragraph(f"Versión de prompts: {configuration.get('prompt_version', 'No registrada')}")
 
     output = io.BytesIO()
     document.save(output)
     return output.getvalue()
-

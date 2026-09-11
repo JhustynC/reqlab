@@ -82,12 +82,14 @@ class SpecializedGenerationAgent:
         client: LLMClient,
         project_name: str,
         domain: str,
+        retrieval_top_k: int = 24,
     ):
         self.contract = contract
         self.retriever = retriever
         self.client = client
         self.project_name = project_name
         self.domain = domain or "dominio descrito por las fuentes"
+        self.retrieval_top_k = retrieval_top_k
         self.last_telemetry: dict[str, Any] = {}
 
     def generate(
@@ -98,22 +100,30 @@ class SpecializedGenerationAgent:
         # Construir query enriquecida: nombre + dominio + tarea genérica + términos especializados del tipo
         specialized = self.contract.retrieval_query or self.contract.task
         query = f"{self.project_name} {self.domain} {specialized}"
-        evidence = self.retriever.retrieve(query, top_k=24)
+        evidence = self.retriever.retrieve(query, top_k=self.retrieval_top_k)
         if not evidence:
             raise RuntimeError(f"{self.contract.agent_id} no recuperó evidencia suficiente para generar artefactos.")
-        try:
-            from .llm_schemas import ArtifactsResponse
-            response = self.client.complete_json_validated(  # type: ignore[union-attr]
+        from .llm_schemas import ArtifactsResponse
+        validation_context = {
+            "artifact_type": self.contract.artifact_type,
+            "valid_citations": [fragment.fragment_id for fragment, _ in evidence],
+            "valid_relations": [artifact.artifact_id for artifact in (existing_artifacts or [])],
+        }
+        validated_completion = getattr(self.client, "complete_json_validated", None)
+        if callable(validated_completion):
+            response = validated_completion(
                 system_prompt=(
                     f"Actúas como {self.contract.role}. Trabajas únicamente con evidencia citada. "
                     "Responde en español y devuelve exclusivamente JSON válido."
                 ),
                 user_prompt=self._prompt(evidence, limit, existing_artifacts or []),
                 schema=ArtifactsResponse,
+                validation_context=validation_context,
             )
             records = [record.model_dump() for record in response.artifacts]
-        except (AttributeError, RuntimeError):
-            # Fallback: el cliente no implementa complete_json_validated (p. ej. mock en tests)
+        else:
+            # Compatibilidad exclusiva con clientes de prueba/legado que no ofrecen
+            # validación. Un fallo real de validación nunca se omite con otra llamada.
             payload = self.client.complete_json(
                 system_prompt=(
                     f"Actúas como {self.contract.role}. Trabajas únicamente con evidencia citada. "
@@ -121,9 +131,8 @@ class SpecializedGenerationAgent:
                 ),
                 user_prompt=self._prompt(evidence, limit, existing_artifacts or []),
             )
-            records = payload.get("artifacts", []) if isinstance(payload, dict) else payload
-            if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
-                raise RuntimeError(f"{self.contract.agent_id} no devolvió la colección 'artifacts' esperada.")
+            response = ArtifactsResponse.model_validate(payload, context=validation_context)
+            records = [record.model_dump() for record in response.artifacts]
 
         if hasattr(self.client, "get_last_telemetry"):
             self.last_telemetry = self.client.get_last_telemetry()
@@ -156,14 +165,17 @@ class SpecializedGenerationAgent:
             "source_fragments": ["identificador exacto de un fragmento"],
             "status": "propuesto|requiere aclaración",
             "acceptance_criteria": ["Criterio verificable; obligatorio para HU"],
+            "related_artifacts": ["RF-001; solo identificadores previos relacionados"],
         }
         rules = "\n".join(f"- {rule}" for rule in self.contract.quality_rules)
 
         coherence_section = ""
         if existing_artifacts:
+            # Se preservan todos los artefactos previos dentro de los límites del
+            # experimento (máximo 20 por tipo), evitando truncar RNF al generar HU.
             summary_lines = [
-                f"- [{a.artifact_id} ({a.artifact_type})] {a.title}: {a.description}"
-                for a in existing_artifacts[:25]
+                f"- [{a.artifact_id} ({a.artifact_type}); estado={a.status}] {a.title}: {a.description}"
+                for a in existing_artifacts
             ]
             coherence_guide = ""
             if self.contract.artifact_type == "HU":
@@ -182,6 +194,7 @@ class SpecializedGenerationAgent:
             coherence_section = f"""
 Artefactos del proyecto ya identificados (mantener coherencia con ellos):
 {coherence_guide}
+Estos artefactos son contexto generado, no evidencia documental. No los uses como source_fragments ni conviertas una incertidumbre en un hecho.
 """ + "\n".join(summary_lines) + "\n"
 
         return f"""Proyecto: {self.project_name}
@@ -195,6 +208,8 @@ Reglas comunes:
 - Genera como máximo {limit} artefactos sin duplicados.
 - Usa solamente la evidencia proporcionada.
 - Cada artefacto debe citar uno o más identificadores exactos presentes en el contexto.
+- source_fragments solo puede contener evidencia documental; no cites identificadores RF/RNF/HU como fuentes.
+- related_artifacts solo puede contener identificadores RF/RNF/HU mostrados en la sección de coherencia.
 - Si falta información, conserva la incertidumbre y usa el estado 'requiere aclaración'.
 - No resuelvas contradicciones mediante suposiciones.
 - Devuelve {{"artifacts": [...]}} usando este esquema: {json.dumps(schema, ensure_ascii=False)}
@@ -273,7 +288,10 @@ class ProjectDefinitionAgent:
         batches = self._batches(fragments)
         summaries = [self._analyze_batch(project_name, domain, batch) for batch in batches]
         summaries = self._compress_summaries(project_name, domain, summaries)
-        payload = self.client.complete_json(
+        from .llm_schemas import DefinitionAnalysisResponse
+
+        payload = self._complete_validated(
+            DefinitionAnalysisResponse,
             system_prompt=(
                 "Eres un analista de requisitos en una etapa de elicitación. Construye una interpretación "
                 "provisional sustentada, conserva las contradicciones y no generes RF, RNF ni historias de usuario. "
@@ -282,6 +300,18 @@ class ProjectDefinitionAgent:
             user_prompt=self._synthesis_prompt(project_name, domain, summaries, maximum_questions),
         )
         return self._normalize_analysis(payload, fragments, maximum_questions, len(batches))
+
+    def _complete_validated(self, schema: type, *, system_prompt: str, user_prompt: str) -> dict[str, Any]:
+        validated_completion = getattr(self.client, "complete_json_validated", None)
+        if callable(validated_completion):
+            return validated_completion(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                schema=schema,
+            ).model_dump()
+        return schema.model_validate(
+            self.client.complete_json(system_prompt=system_prompt, user_prompt=user_prompt)
+        ).model_dump()
 
     def _batches(self, fragments: list[Fragment]) -> list[list[Fragment]]:
         batches: list[list[Fragment]] = []
@@ -305,7 +335,10 @@ class ProjectDefinitionAgent:
         context = "\n\n".join(
             f"[{fragment.fragment_id}] {fragment.heading}\n{fragment.text}" for fragment in fragments
         )
-        return self.client.complete_json(
+        from .llm_schemas import DefinitionBatchResponse
+
+        payload = self._complete_validated(
+            DefinitionBatchResponse,
             system_prompt=(
                 "Analiza el bloque completo de fuentes como evidencia de elicitación. No redactes requisitos, "
                 "no completes vacíos con conocimiento externo y devuelve exclusivamente JSON válido."
@@ -322,6 +355,7 @@ Devuelve:
 Bloque de fuentes:
 {context}""",
         )
+        return payload
 
     def _compress_summaries(
         self, project_name: str, domain: str, summaries: list[dict[str, Any]]
@@ -339,8 +373,11 @@ Bloque de fuentes:
                 size += len(rendered)
             if current:
                 groups.append(current)
+            from .llm_schemas import DefinitionBatchResponse
+
             summaries = [
-                self.client.complete_json(
+                self._complete_validated(
+                    DefinitionBatchResponse,
                     system_prompt=(
                         "Fusiona resúmenes de evidencia sin perder citas, ausencias ni contradicciones. "
                         "No generes requisitos y devuelve exclusivamente JSON válido."
@@ -471,24 +508,40 @@ class RevisionAgent:
     def propose(self, artifact: dict[str, Any], instruction: str) -> Artifact:
         evidence = self.retriever.retrieve(f"{artifact['description']} {instruction}", top_k=12)
         context = "\n\n".join(f"[{fragment.fragment_id}] {fragment.text}" for fragment, _ in evidence)
-        payload = self.client.complete_json(
-            system_prompt=(
+        from .llm_schemas import RevisionResponse
+
+        validation_context = {
+            "artifact_type": artifact["artifact_type"],
+            "valid_citations": [fragment.fragment_id for fragment, _ in evidence],
+            "valid_relations": artifact.get("related_artifacts", []),
+        }
+        validated_completion = getattr(self.client, "complete_json_validated", None)
+        common = {
+            "system_prompt": (
                 "Eres un revisor de requisitos. Propón cambios sustentados, conserva el tipo y el identificador, "
                 "y devuelve exclusivamente JSON válido."
             ),
-            user_prompt=f"""Artefacto vigente:
-{json.dumps({key: artifact[key] for key in ('artifact_key', 'artifact_type', 'title', 'description', 'priority', 'source_fragments', 'status', 'acceptance_criteria')}, ensure_ascii=False)}
+            "user_prompt": f"""Artefacto vigente:
+{json.dumps({key: artifact[key] for key in ('artifact_key', 'artifact_type', 'title', 'description', 'priority', 'source_fragments', 'status', 'acceptance_criteria', 'related_artifacts')}, ensure_ascii=False)}
 
 Solicitud del usuario: {instruction}
 
 Evidencia disponible:
 {context}
 
-Devuelve {{"artifact": {{"artifact_id": "{artifact['artifact_key']}", "title": "...", "description": "...", "priority": "Alta|Media|Baja", "source_fragments": ["..."], "status": "propuesto|requiere aclaración", "acceptance_criteria": ["..."]}}}}.
+Devuelve {{"artifact": {{"artifact_id": "{artifact['artifact_key']}", "title": "...", "description": "...", "priority": "Alta|Media|Baja", "source_fragments": ["..."], "status": "propuesto|requiere aclaración", "acceptance_criteria": ["..."], "related_artifacts": []}}}}.
 No introduzcas información que no esté en la evidencia.""",
-        )
-        record = payload.get("artifact") if isinstance(payload, dict) else None
-        if not isinstance(record, dict):
-            raise RuntimeError("El agente de revisión no devolvió la propuesta esperada.")
+        }
+        if callable(validated_completion):
+            response = validated_completion(
+                **common,
+                schema=RevisionResponse,
+                validation_context=validation_context,
+            )
+        else:
+            response = RevisionResponse.model_validate(
+                self.client.complete_json(**common), context=validation_context
+            )
+        record = response.artifact.model_dump()
         record["artifact_id"] = artifact["artifact_key"]
         return Artifact.from_dict(record, artifact["artifact_type"], 1)

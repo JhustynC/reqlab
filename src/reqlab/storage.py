@@ -136,6 +136,7 @@ class SQLiteRepository:
                     source_fragments_json TEXT NOT NULL,
                     status TEXT NOT NULL,
                     acceptance_criteria_json TEXT NOT NULL,
+                    related_artifacts_json TEXT NOT NULL DEFAULT '[]',
                     version INTEGER NOT NULL DEFAULT 1,
                     validation_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
@@ -214,6 +215,13 @@ class SQLiteRepository:
                     connection.execute(
                         f"ALTER TABLE definition_questions ADD COLUMN {column} {declaration}"
                     )
+            artifact_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(artifacts)").fetchall()
+            }
+            if "related_artifacts_json" not in artifact_columns:
+                connection.execute(
+                    "ALTER TABLE artifacts ADD COLUMN related_artifacts_json TEXT NOT NULL DEFAULT '[]'"
+                )
             connection.execute("PRAGMA optimize")
 
     def create_project(self, name: str, description: str = "", domain: str = "") -> dict[str, Any]:
@@ -722,6 +730,19 @@ class SQLiteRepository:
         result["parameters"] = json.loads(result.pop("parameters_json"))
         return result
 
+    def latest_run(self, project_id: str, agent_id: str = "orchestrator.main") -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM runs WHERE project_id = ? AND agent_id = ?
+                   ORDER BY started_at DESC LIMIT 1""",
+                (project_id, agent_id),
+            ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        result["parameters"] = json.loads(result.pop("parameters_json"))
+        return result
+
     def update_run_progress(self, run_id: str, progress: int, message: str, step: str) -> None:
         run = self.get_run(run_id)
         parameters = run["parameters"]
@@ -749,8 +770,9 @@ class SQLiteRepository:
             connection.execute(
                 """INSERT INTO artifacts
                    (id, project_id, artifact_key, artifact_type, title, description, priority,
-                    source_fragments_json, status, acceptance_criteria_json, version, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                    source_fragments_json, status, acceptance_criteria_json, related_artifacts_json,
+                    version, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
                 (
                     artifact_id,
                     project_id,
@@ -762,6 +784,7 @@ class SQLiteRepository:
                     json.dumps(artifact.source_fragments, ensure_ascii=False),
                     artifact.status,
                     json.dumps(artifact.acceptance_criteria or [], ensure_ascii=False),
+                    json.dumps(artifact.related_artifacts or [], ensure_ascii=False),
                     now,
                     now,
                 ),
@@ -787,7 +810,8 @@ class SQLiteRepository:
         with self.connection() as connection:
             connection.execute(
                 """UPDATE artifacts SET title = ?, description = ?, priority = ?, source_fragments_json = ?,
-                   status = ?, acceptance_criteria_json = ?, version = ?, updated_at = ? WHERE id = ?""",
+                   status = ?, acceptance_criteria_json = ?, related_artifacts_json = ?,
+                   validation_json = '{}', version = ?, updated_at = ? WHERE id = ?""",
                 (
                     artifact.title,
                     artifact.description,
@@ -795,6 +819,7 @@ class SQLiteRepository:
                     json.dumps(artifact.source_fragments, ensure_ascii=False),
                     artifact.status,
                     json.dumps(artifact.acceptance_criteria or [], ensure_ascii=False),
+                    json.dumps(artifact.related_artifacts or [], ensure_ascii=False),
                     version,
                     now,
                     artifact_id,
@@ -851,6 +876,12 @@ class SQLiteRepository:
                 "INSERT INTO validation_reports (id, project_id, report_json, created_at) VALUES (?, ?, ?, ?)",
                 (str(uuid.uuid4()), project_id, json.dumps(report, ensure_ascii=False), utc_now()),
             )
+            validations = report.get("artifact_validations", {})
+            for artifact_key, validation in validations.items():
+                connection.execute(
+                    "UPDATE artifacts SET validation_json = ? WHERE project_id = ? AND artifact_key = ?",
+                    (json.dumps(validation, ensure_ascii=False), project_id, artifact_key),
+                )
 
     def latest_validation_report(self, project_id: str) -> dict[str, Any] | None:
         with self.connection() as connection:
@@ -907,5 +938,6 @@ class SQLiteRepository:
         item = dict(row)
         item["source_fragments"] = json.loads(item.pop("source_fragments_json"))
         item["acceptance_criteria"] = json.loads(item.pop("acceptance_criteria_json"))
+        item["related_artifacts"] = json.loads(item.pop("related_artifacts_json", "[]"))
         item["validation"] = json.loads(item.pop("validation_json"))
         return item

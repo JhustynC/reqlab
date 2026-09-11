@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+from contextvars import ContextVar
 from typing import Any, Protocol, TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -50,14 +51,19 @@ class OpenAICompatibleClient:
         ).rstrip("/")
         self.model = model or os.getenv("LLM_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
         self.max_retries = max_retries
-        self.last_telemetry: dict[str, Any] = {}
+        self._telemetry: ContextVar[dict[str, Any]] = ContextVar(
+            f"llm_telemetry_{id(self)}", default={}
+        )
 
     @property
     def configured(self) -> bool:
         return bool(self.api_key)
 
     def get_last_telemetry(self) -> dict[str, Any]:
-        return dict(self.last_telemetry)
+        return dict(self._telemetry.get())
+
+    def _set_telemetry(self, telemetry: dict[str, Any]) -> None:
+        self._telemetry.set(dict(telemetry))
 
     def complete_json(
         self,
@@ -87,26 +93,36 @@ class OpenAICompatibleClient:
             headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
             method="POST",
         )
+        self._set_telemetry({})
         start_time = time.perf_counter()
         try:
             with urlopen(request, timeout=timeout) as response:
                 body = json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
+            self._set_telemetry({
+                "latency_ms": round((time.perf_counter() - start_time) * 1000, 2),
+                "attempts": 1,
+                "failed": True,
+            })
             detail = error.read().decode("utf-8", errors="replace")[:500]
             raise RuntimeError(f"El LLM respondió HTTP {error.code}: {detail}") from error
         except URLError as error:
+            self._set_telemetry({
+                "latency_ms": round((time.perf_counter() - start_time) * 1000, 2),
+                "attempts": 1,
+                "failed": True,
+            })
             raise RuntimeError(f"No se pudo conectar con el LLM: {error.reason}") from error
-        finally:
-            elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
         usage = body.get("usage", {}) if isinstance(body, dict) else {}
-        self.last_telemetry = {
+        self._set_telemetry({
             "latency_ms": elapsed_ms,
             "prompt_tokens": usage.get("prompt_tokens"),
             "completion_tokens": usage.get("completion_tokens"),
             "total_tokens": usage.get("total_tokens"),
             "attempts": 1,
-        }
+        })
 
         try:
             content = body["choices"][0]["message"]["content"]
@@ -126,37 +142,45 @@ class OpenAICompatibleClient:
         temperature: float = 0.1,
         timeout: int = 120,
         max_retries: int | None = None,
+        validation_context: dict[str, Any] | None = None,
     ) -> T:
         attempts = max_retries if max_retries is not None else self.max_retries
         last_error: Exception | None = None
         total_latency_ms = 0.0
         total_tokens_accum = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
+        if attempts < 1:
+            raise ValueError("max_retries debe ser al menos 1.")
+
         for attempt in range(1, attempts + 1):
             try:
                 payload = self.complete_json(system_prompt, user_prompt, temperature, timeout)
-                # Acumular telemetría
-                total_latency_ms += self.last_telemetry.get("latency_ms", 0.0)
-                for k in total_tokens_accum:
-                    val = self.last_telemetry.get(k)
-                    if val is not None:
-                        total_tokens_accum[k] += val
-
-                self.last_telemetry = {
+                current = self.get_last_telemetry()
+                total_latency_ms += current.get("latency_ms", 0.0)
+                for key in total_tokens_accum:
+                    value = current.get(key)
+                    if value is not None:
+                        total_tokens_accum[key] += value
+                validated = schema.model_validate(payload, context=validation_context)
+                self._set_telemetry({
                     "latency_ms": round(total_latency_ms, 2),
                     "prompt_tokens": total_tokens_accum["prompt_tokens"] or None,
                     "completion_tokens": total_tokens_accum["completion_tokens"] or None,
                     "total_tokens": total_tokens_accum["total_tokens"] or None,
                     "attempts": attempt,
-                }
-                return schema.model_validate(payload)
+                })
+                return validated
             except (ValidationError, RuntimeError, ValueError) as error:
                 last_error = error
-                total_latency_ms += self.last_telemetry.get("latency_ms", 0.0)
-                for k in total_tokens_accum:
-                    val = self.last_telemetry.get(k)
-                    if val is not None:
-                        total_tokens_accum[k] += val
+                # Los fallos de transporte/JSON ya traen la telemetría del intento.
+                # Los fallos de validación ya fueron acumulados en el bloque anterior.
+                if not isinstance(error, ValidationError):
+                    current = self.get_last_telemetry()
+                    total_latency_ms += current.get("latency_ms", 0.0)
+                    for key in total_tokens_accum:
+                        value = current.get(key)
+                        if value is not None:
+                            total_tokens_accum[key] += value
                 if attempt >= attempts:
                     break
                 user_prompt = (
@@ -165,14 +189,14 @@ class OpenAICompatibleClient:
                     "Devuelve exclusivamente JSON válido que cumpla el contrato solicitado."
                 )
 
-        self.last_telemetry = {
+        self._set_telemetry({
             "latency_ms": round(total_latency_ms, 2),
             "prompt_tokens": total_tokens_accum["prompt_tokens"] or None,
             "completion_tokens": total_tokens_accum["completion_tokens"] or None,
             "total_tokens": total_tokens_accum["total_tokens"] or None,
             "attempts": attempts,
             "failed": True,
-        }
+        })
         raise RuntimeError(f"El LLM no devolvió una respuesta válida tras {attempts} intentos.") from last_error
 
 

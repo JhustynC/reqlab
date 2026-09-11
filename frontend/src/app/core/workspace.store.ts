@@ -37,13 +37,15 @@ export class WorkspaceStore {
   }
   async loadWorkspace(projectId: string): Promise<void> {
     await this.perform(async () => {
-      const [project, sources, questions, artifacts, validation] = await Promise.all([
+      const [project, sources, questions, artifacts, validation, latestRun] = await Promise.all([
         firstValueFrom(this.api.getProject(projectId)), firstValueFrom(this.api.listSources(projectId)),
         firstValueFrom(this.api.listQuestions(projectId)), firstValueFrom(this.api.listArtifacts(projectId)),
         firstValueFrom(this.api.latestValidation(projectId)),
+        firstValueFrom(this.api.latestRun(projectId)),
       ]);
       this.project.set(project); this.sources.set(sources); this.questions.set(questions);
       this.artifacts.set(artifacts); this.validation.set(validation.report);
+      this.run.set(latestRun.run);
       const selectedId = this.selectedArtifact()?.id;
       this.selectedArtifact.set(artifacts.find((item) => item.id === selectedId) ?? null);
     });

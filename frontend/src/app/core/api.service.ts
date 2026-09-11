@@ -125,6 +125,11 @@ export class ApiService {
   getRun(runId: string): Observable<GenerationRun> {
     return this.http.get<GenerationRun>(`${this.base}/runs/${runId}`);
   }
+  latestRun(projectId: string): Observable<{ run: GenerationRun | null }> {
+    return this.http.get<{ run: GenerationRun | null }>(
+      `${this.base}/projects/${projectId}/runs/latest`,
+    );
+  }
   listArtifacts(projectId: string, artifactType?: ArtifactType): Observable<Artifact[]> {
     const params = artifactType ? new HttpParams().set('artifact_type', artifactType) : undefined;
     return this.http.get<Artifact[]>(`${this.base}/projects/${projectId}/artifacts`, { params });
@@ -137,6 +142,7 @@ export class ApiService {
       status: artifact.status,
       source_fragments: artifact.source_fragments,
       acceptance_criteria: artifact.acceptance_criteria,
+      related_artifacts: artifact.related_artifacts,
     });
   }
   listVersions(projectId: string, artifactId: string): Observable<Array<Record<string, unknown>>> {

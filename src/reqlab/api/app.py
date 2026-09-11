@@ -12,7 +12,7 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title="ReqLab API",
         description="API local para generación trazable de requisitos desde fuentes heterogéneas.",
-        version="0.2.0",
+        version="0.3.0",
     )
     application.add_middleware(
         CORSMiddleware,

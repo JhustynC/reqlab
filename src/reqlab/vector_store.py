@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
+import re
 from typing import Protocol
 
 from .models import Fragment
@@ -44,7 +46,8 @@ class SentenceTransformerEmbeddingProvider:
 
     def embed_query(self, text: str) -> list[float]:
         query = f"{self.query_prefix}{text}" if self.query_prefix else text
-        return self.embed_documents([query])[0]
+        vectors = self._load().encode([query], normalize_embeddings=True, show_progress_bar=False)
+        return vectors[0].tolist()
 
 
 class CrossEncoderReranker:
@@ -84,7 +87,12 @@ class CrossEncoderReranker:
 class ChromaProjectVectorStore:
     """Índice vectorial persistente de fragmentos separado por proyecto."""
 
-    def __init__(self, persistence_path: str | Path, embedding_provider: EmbeddingProvider | None = None):
+    def __init__(
+        self,
+        persistence_path: str | Path,
+        embedding_provider: EmbeddingProvider | None = None,
+        collection_name: str = "requirements_fragments_v1",
+    ):
         try:
             import chromadb
             from chromadb.config import Settings as ChromaSettings
@@ -100,7 +108,7 @@ class ChromaProjectVectorStore:
             settings=ChromaSettings(anonymized_telemetry=False),
         )
         self.collection = self.client.get_or_create_collection(
-            name="requirements_fragments",
+            name=collection_name,
             metadata={"hnsw:space": "cosine"},
         )
 
@@ -111,7 +119,13 @@ class ChromaProjectVectorStore:
             query_prefix=settings.embedding_query_prefix,
             passage_prefix=settings.embedding_passage_prefix,
         )
-        return cls(persistence_path, provider)
+        # Cada modelo usa su propio espacio vectorial. Esto evita mezclar dimensiones
+        # incompatibles cuando se cambia el modelo de embeddings entre experimentos.
+        slug = re.sub(r"[^a-z0-9]+", "-", settings.embedding_model.lower()).strip("-")[:34]
+        digest = hashlib.sha256(
+            f"{settings.embedding_model}|{settings.embedding_query_prefix}|{settings.embedding_passage_prefix}".encode()
+        ).hexdigest()[:10]
+        return cls(persistence_path, provider, f"req-{slug}-{digest}")
 
     @staticmethod
     def _vector_id(project_id: str, fragment_id: str) -> str:
@@ -160,6 +174,10 @@ class ChromaProjectVectorStore:
         except Exception as error:
             if "empty" not in str(error).lower() and "nothing" not in str(error).lower():
                 raise
+
+    def has_project(self, project_id: str) -> bool:
+        result = self.collection.get(where={"project_id": project_id}, limit=1, include=[])
+        return bool(result.get("ids"))
 
     def retrieve(self, project_id: str, query: str, top_k: int = 12) -> list[tuple[Fragment, float]]:
         result = self.collection.query(

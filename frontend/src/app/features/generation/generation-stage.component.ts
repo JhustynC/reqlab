@@ -38,7 +38,7 @@ export class GenerationStageComponent implements OnDestroy {
   private readonly api = inject(ApiService);
   private readonly router = inject(Router);
   readonly busy = signal(false);
-  readonly limit = signal(1);
+  readonly limit = signal(12);
   private timer?: ReturnType<typeof setTimeout>;
   readonly steps = [
     { key: 'retrieval', label: 'Recuperación de evidencia', description: 'Seleccionar contexto relevante para cada tipo de artefacto', icon: 'search', order: 1 },

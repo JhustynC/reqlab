@@ -34,7 +34,9 @@ El agente de definición recorre todos los fragmentos del proyecto mediante aná
 | ChromaDB | Embeddings y búsqueda semántica de fragmentos, aislados por proyecto. |
 | Sistema de archivos | Documentos originales, caché del modelo de embeddings y exportaciones descargadas por el usuario. |
 
-La recuperación es híbrida: combina TF-IDF y similitud vectorial mediante Reciprocal Rank Fusion. Los embeddings se calculan localmente con un modelo multilingüe de `sentence-transformers`; DeepSeek se utiliza para interpretar el corpus, generar preguntas adaptativas y artefactos, y proponer revisiones.
+La recuperación es híbrida: combina TF-IDF y similitud vectorial mediante Reciprocal Rank Fusion, con reranking multilingüe opcional. Los embeddings se calculan localmente con `sentence-transformers`; DeepSeek es el proveedor LLM validado para interpretar el corpus, generar preguntas adaptativas y artefactos, y proponer revisiones.
+
+Cada ejecución conserva una instantánea de su configuración técnica. Los resultados incluyen relaciones explícitas RF–RNF–HU, validación por artefacto y vínculos separados hacia la evidencia documental. Angular presenta esta información en las vistas de revisión, trazabilidad, observaciones y ejecución.
 
 ## Ejecución con Docker
 
@@ -42,7 +44,7 @@ Requisitos:
 
 - Docker Desktop en ejecución.
 - Un archivo `.env` basado en `config.example.env`.
-- Una clave válida en `DEEPSEEK_API_KEY`.
+- Una clave válida en `LLM_API_KEY` o, por retrocompatibilidad, `DEEPSEEK_API_KEY`.
 
 Desde esta carpeta:
 
@@ -90,7 +92,7 @@ npm start
 
 ## Pruebas
 
-Las pruebas del núcleo y del flujo web no consumen la API:
+Las pruebas del núcleo y del flujo web no consumen un proveedor LLM externo:
 
 ```powershell
 $env:PYTHONPATH = "$PWD\src"

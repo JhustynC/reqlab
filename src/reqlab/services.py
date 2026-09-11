@@ -13,7 +13,7 @@ from .models import Artifact
 from .settings import Settings
 from .storage import SQLiteRepository
 from .validation import TraceabilityConsistencyAgent
-from .vector_store import ChromaProjectVectorStore, HybridRetrievalAgent
+from .vector_store import ChromaProjectVectorStore, CrossEncoderReranker, HybridRetrievalAgent
 
 
 class ProjectApplicationService:
@@ -26,6 +26,7 @@ class ProjectApplicationService:
         data_dir: str | Path,
         client: DeepSeekClient,
         settings: Settings | None = None,
+        reranker: CrossEncoderReranker | None = None,
     ):
         self.repository = repository
         self.vector_store = vector_store
@@ -33,6 +34,7 @@ class ProjectApplicationService:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.client = client
         self.settings = settings
+        self.reranker = reranker
         chunk_size = settings.chunk_size if settings else 1200
         chunk_overlap = settings.chunk_overlap if settings else 180
         self.extractor = DocumentExtractionService()
@@ -91,14 +93,22 @@ class ProjectApplicationService:
             source_kind,
         )
         try:
-            fragments = self.segmenter.segment(extracted.text, source_code, filename)
+            stale_definition_ids = [
+                fragment.fragment_id
+                for fragment in self.repository.list_fragments(project_id)
+                if fragment.source_id == "USR-DEF"
+            ]
+            fragments = self.segmenter.segment(
+                extracted.text, source_code, filename, source_kind=source_kind
+            )
             if not fragments:
                 raise ValueError("La segmentación no produjo fragmentos utilizables.")
             self.repository.replace_source_fragments(source, fragments)
             self.repository.invalidate_after_source_change(project_id)
+            self.vector_store.delete_fragments(project_id, stale_definition_ids)
             self.repository.update_source_status(source["id"], "processed")
             if index_after:
-                self.reindex(project_id)
+                self.vector_store.upsert_fragments(project_id, fragments)
                 self.repository.mark_project_sources_indexed(project_id)
             self.repository.update_project_status(project_id, "sources_ready")
         except Exception as error:
@@ -157,13 +167,15 @@ class ProjectApplicationService:
             raise ValueError("No se puede eliminar una fuente mientras se generan artefactos.")
         source = self.repository.get_project_source(project_id, source_id)
         stored_path = self._stored_source_path(project_id, source["stored_path"])
-        self.vector_store.delete_project(project_id)
+        source_fragment_ids = [
+            fragment.fragment_id
+            for fragment in self.repository.list_fragments(project_id)
+            if fragment.source_id in {source["source_code"], "USR-DEF"}
+        ]
+        self.vector_store.delete_fragments(project_id, source_fragment_ids)
         deleted = self.repository.delete_source_and_invalidate(project_id, source_id)
         if stored_path.exists():
             stored_path.unlink()
-        remaining_fragments = self.repository.list_fragments(project_id)
-        if remaining_fragments:
-            self.vector_store.index(project_id, remaining_fragments)
         return deleted
 
     def reindex(self, project_id: str) -> None:
@@ -217,9 +229,15 @@ class ProjectApplicationService:
             "pending_questions": [],
             "analysis_coverage": provisional["profile"].get("coverage", {}),
         }
-        self.repository.upsert_definition_fragments(project_id, questions)
+        previous_definition_ids = [
+            fragment.fragment_id
+            for fragment in self.repository.list_fragments(project_id)
+            if fragment.source_id == "USR-DEF"
+        ]
+        definition_fragments = self.repository.upsert_definition_fragments(project_id, questions)
         self.repository.save_profile(project_id, profile, confirmed=True)
-        self.reindex(project_id)
+        self.vector_store.delete_fragments(project_id, previous_definition_ids)
+        self.vector_store.upsert_fragments(project_id, definition_fragments)
         return profile
 
     def generate_artifacts(
@@ -235,13 +253,10 @@ class ProjectApplicationService:
         fragments = self.repository.list_fragments(project_id)
         if not fragments:
             raise ValueError("El proyecto no contiene fragmentos indexados.")
-        retriever = HybridRetrievalAgent(
-            project_id,
-            fragments,
-            self.vector_store,
-            lexical_weight=self.settings.rrf_lexical_weight if self.settings else 0.45,
-            semantic_weight=self.settings.rrf_semantic_weight if self.settings else 0.55,
-        )
+        if not self.vector_store.has_project(project_id):
+            # Migración segura al espacio del modelo de embeddings configurado.
+            self.vector_store.upsert_fragments(project_id, fragments)
+        retriever = self._retriever(project_id, fragments)
         artifacts: list[Artifact] = []
         retrieval_log: dict[str, list[dict[str, Any]]] = {}
         telemetry_log: dict[str, dict[str, Any]] = {}
@@ -249,7 +264,7 @@ class ProjectApplicationService:
             project_id,
             "generation",
             "orchestrator.main",
-            {"model": self.client.model, "limit_per_type": limit_per_type, "retrieval": "hybrid_rrf"},
+            self.run_parameters(limit_per_type),
         )
         progress = progress_callback or (lambda _percent, _message, _step: None)
         self.repository.update_project_status(project_id, "generating")
@@ -258,7 +273,9 @@ class ProjectApplicationService:
             for position, artifact_type in enumerate(("RF", "RNF", "HU"), start=1):
                 contract = CONTRACTS[artifact_type]
                 progress(15 + (position - 1) * 24, f"Ejecutando {contract.agent_id}", f"generating_{artifact_type.lower()}")
-                child_run_id = self.repository.start_run(project_id, "generation", contract.agent_id)
+                child_run_id = self.repository.start_run(
+                    project_id, "generation", contract.agent_id, self.run_parameters(limit_per_type)
+                )
                 try:
                     agent = SpecializedGenerationAgent(
                         contract,
@@ -266,12 +283,14 @@ class ProjectApplicationService:
                         self.client,
                         project["name"],
                         project["domain"],
+                        retrieval_top_k=self.settings.retrieval_top_k if self.settings else 24,
                     )
                     # Se inyectan los artefactos ya generados para asegurar coherencia y evitar redundancias cross-type
                     generated, evidence = agent.generate(limit=limit_per_type, existing_artifacts=list(artifacts))
                     artifacts.extend(generated)
+                    score_name = "reranker_score" if self.reranker else "rrf_score"
                     retrieval_log[artifact_type] = [
-                        {"fragment_id": fragment.fragment_id, "rrf_score": round(score, 8)}
+                        {"fragment_id": fragment.fragment_id, score_name: round(score, 8)}
                         for fragment, score in evidence
                     ]
                     agent_metrics = getattr(agent, "last_telemetry", {}) or {}
@@ -281,7 +300,12 @@ class ProjectApplicationService:
                     self.repository.finish_run(child_run_id, "failed", str(error))
                     raise
             progress(88, "Validando trazabilidad y consistencia", "validation")
-            report = TraceabilityConsistencyAgent().validate(artifacts, fragments)
+            report = TraceabilityConsistencyAgent(
+                duplicate_threshold=self.settings.duplicate_threshold if self.settings else 0.72,
+                cross_type_duplicate_threshold=(
+                    self.settings.cross_type_duplicate_threshold if self.settings else 0.55
+                ),
+            ).validate(artifacts, fragments)
             self.repository.save_artifacts(project_id, artifacts)
             self.repository.save_validation_report(project_id, report)
             progress(100, "Artefactos disponibles para revisión", "completed")
@@ -312,11 +336,13 @@ class ProjectApplicationService:
         if not instruction.strip():
             raise ValueError("Indique qué desea mejorar en el artefacto.")
         fragments = self.repository.list_fragments(project_id)
-        retriever = HybridRetrievalAgent(project_id, fragments, self.vector_store)
+        retriever = self._retriever(project_id, fragments)
         return RevisionAgent(self.client, retriever).propose(self.repository.get_artifact(artifact_id), instruction)
 
     def accept_revision(self, artifact_id: str, proposal: Artifact, instruction: str) -> dict[str, Any]:
-        return self.repository.update_artifact(artifact_id, proposal, "ai_revision", instruction)
+        updated = self.repository.update_artifact(artifact_id, proposal, "ai_revision", instruction)
+        self._refresh_validation(updated["project_id"])
+        return self.repository.get_artifact(artifact_id)
 
     def create_revision_proposal(self, project_id: str, artifact_id: str, instruction: str) -> dict[str, Any]:
         proposal = self.propose_revision(project_id, artifact_id, instruction)
@@ -344,8 +370,53 @@ class ProjectApplicationService:
             source_fragments=list(values.get("source_fragments", current["source_fragments"])),
             status=str(values.get("status", current["status"])),
             acceptance_criteria=list(values.get("acceptance_criteria", current["acceptance_criteria"])),
+            related_artifacts=list(
+                current.get("related_artifacts", [])
+                if values.get("related_artifacts") is None
+                else values["related_artifacts"]
+            ),
         )
-        return self.repository.update_artifact(artifact_id, artifact, "manual_revision")
+        updated = self.repository.update_artifact(artifact_id, artifact, "manual_revision")
+        self._refresh_validation(updated["project_id"])
+        return self.repository.get_artifact(artifact_id)
+
+    def _refresh_validation(self, project_id: str) -> None:
+        artifacts = [
+            Artifact.from_dict(item | {"artifact_id": item["artifact_key"]}, item["artifact_type"], index)
+            for index, item in enumerate(self.repository.list_artifacts(project_id), start=1)
+        ]
+        report = TraceabilityConsistencyAgent(
+            duplicate_threshold=self.settings.duplicate_threshold if self.settings else 0.72,
+            cross_type_duplicate_threshold=(
+                self.settings.cross_type_duplicate_threshold if self.settings else 0.55
+            ),
+        ).validate(artifacts, self.repository.list_fragments(project_id))
+        self.repository.save_validation_report(project_id, report)
+
+    def _retriever(self, project_id: str, fragments: list) -> HybridRetrievalAgent:
+        return HybridRetrievalAgent(
+            project_id,
+            fragments,
+            self.vector_store,
+            lexical_weight=self.settings.rrf_lexical_weight if self.settings else 0.45,
+            semantic_weight=self.settings.rrf_semantic_weight if self.settings else 0.55,
+            reranker=self.reranker,
+        )
+
+    def run_parameters(self, limit_per_type: int) -> dict[str, Any]:
+        parameters: dict[str, Any] = {
+            "model": self.client.model,
+            "limit_per_type": limit_per_type,
+            "retrieval": "hybrid_rrf",
+            "generation_order": ["RF", "RNF", "HU"],
+            "agent_retrieval_queries": {
+                artifact_type: contract.retrieval_query
+                for artifact_type, contract in CONTRACTS.items()
+            },
+        }
+        if self.settings:
+            parameters["experimental_config"] = self.settings.experimental_snapshot()
+        return parameters
 
     @staticmethod
     def _answer(questions: list[dict[str, Any]], key: str) -> str:
@@ -399,10 +470,11 @@ def project_export_payload(repository: SQLiteRepository, project_id: str) -> dic
             for item in repository.list_sources(project_id)
         ],
         "artifacts": [
-            {key: item[key] for key in ("artifact_key", "artifact_type", "title", "description", "priority", "source_fragments", "status", "acceptance_criteria", "version")}
+            {key: item[key] for key in ("artifact_key", "artifact_type", "title", "description", "priority", "source_fragments", "status", "acceptance_criteria", "related_artifacts", "validation", "version")}
             for item in repository.list_artifacts(project_id)
         ],
         "validation": (repository.latest_validation_report(project_id) or {}).get("report", {}),
+        "generation_run": repository.latest_run(project_id),
     }
 
 

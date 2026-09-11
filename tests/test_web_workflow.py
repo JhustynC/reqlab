@@ -18,13 +18,31 @@ from reqlab.storage import SQLiteRepository
 class FakeVectorStore:
     def __init__(self):
         self.fragments = {}
+        self.upsert_calls = []
+        self.delete_fragment_calls = []
 
     def index(self, project_id, fragments):
         self.fragments[project_id] = list(fragments)
 
+    def upsert_fragments(self, project_id, fragments):
+        self.upsert_calls.append((project_id, [item.fragment_id for item in fragments]))
+        current = {item.fragment_id: item for item in self.fragments.get(project_id, [])}
+        current.update({item.fragment_id: item for item in fragments})
+        self.fragments[project_id] = list(current.values())
+
+    def delete_fragments(self, project_id, fragment_ids):
+        self.delete_fragment_calls.append((project_id, list(fragment_ids)))
+        removed = set(fragment_ids)
+        self.fragments[project_id] = [
+            item for item in self.fragments.get(project_id, []) if item.fragment_id not in removed
+        ]
+
     def retrieve(self, project_id, query, top_k=12):
         del query
         return [(fragment, 0.9) for fragment in self.fragments.get(project_id, [])[:top_k]]
+
+    def has_project(self, project_id):
+        return bool(self.fragments.get(project_id))
 
     def delete_project(self, project_id):
         self.fragments.pop(project_id, None)
@@ -41,15 +59,18 @@ class FakeDeepSeekClient:
         del system_prompt, temperature, timeout
         self.prompts.append(user_prompt)
         if "Tarea exclusiva del agente" in user_prompt:
-            if "historias de usuario" in user_prompt.lower():
+            if "Expresar necesidades de los actores" in user_prompt:
                 description = "Como operador, quiero registrar solicitudes, para mantener su seguimiento"
                 criteria = ["La solicitud queda registrada con un identificador."]
-            elif "atributos de calidad" in user_prompt.lower():
+                relations = ["RF-001"]
+            elif "Identificar atributos de calidad" in user_prompt:
                 description = "El sistema deberá conservar el registro de cada solicitud según la política declarada."
                 criteria = []
+                relations = ["RF-001"]
             else:
                 description = "El sistema deberá permitir registrar una solicitud."
                 criteria = []
+                relations = []
             return {
                 "artifacts": [
                     {
@@ -59,6 +80,7 @@ class FakeDeepSeekClient:
                         "source_fragments": ["SRC-001-F001"],
                         "status": "propuesto",
                         "acceptance_criteria": criteria,
+                        "related_artifacts": relations,
                     }
                 ]
             }
@@ -153,6 +175,8 @@ class WebWorkflowTests(unittest.TestCase):
 
         self.assertEqual(3, len(result["artifacts"]))
         self.assertEqual({"RF", "RNF", "HU"}, {item["artifact_type"] for item in saved})
+        self.assertEqual(["RF-001"], next(item for item in saved if item["artifact_type"] == "HU")["related_artifacts"])
+        self.assertTrue(all("status" in item["validation"] for item in saved))
         self.assertEqual("review", self.repository.get_project(project["id"])["status"])
         self.assertEqual(3, project_export_payload(self.repository, project["id"])["validation"]["artifact_count"])
 
@@ -183,6 +207,9 @@ class WebWorkflowTests(unittest.TestCase):
         self.assertEqual([], self.repository.list_artifacts(project["id"]))
         self.assertEqual("created", self.repository.get_project(project["id"])["status"])
         self.assertFalse(self.repository.get_project(project["id"])["definition_confirmed"])
+        deleted_ids = set(self.vector_store.delete_fragment_calls[-1][1])
+        self.assertTrue(any(item.startswith("SRC-001-") for item in deleted_ids))
+        self.assertTrue(any(item.startswith("USR-DEF-") for item in deleted_ids))
 
     def test_projects_can_be_archived_restored_and_deleted(self):
         project = self.service.create_project("Proyecto temporal")
@@ -211,6 +238,7 @@ class WebWorkflowTests(unittest.TestCase):
         self.assertEqual("email", preview["source_kind"])
         self.assertIn("hoy los anotamos en mensajes", preview["text"])
         self.assertGreater(preview["fragment_count"], 0)
+        self.assertTrue(self.vector_store.upsert_calls)
 
     def test_definition_analysis_visits_every_fragment_in_multiple_batches(self):
         fragments = [
@@ -227,6 +255,14 @@ class WebWorkflowTests(unittest.TestCase):
         self.assertEqual(6, len(batch_prompts))
         for fragment in fragments:
             self.assertIn(fragment.fragment_id, combined)
+
+    def test_service_wires_optional_reranker_into_hybrid_retrieval(self):
+        marker = object()
+        service = ProjectApplicationService(
+            self.repository, self.vector_store, Path(self.temporary.name), self.client, reranker=marker
+        )
+        retriever = service._retriever("project", [])
+        self.assertIs(marker, retriever.reranker)
 
 
 if __name__ == "__main__":

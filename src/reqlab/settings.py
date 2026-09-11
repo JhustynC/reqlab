@@ -45,6 +45,53 @@ class Settings:
     retrieval_top_k: int
     chunk_size: int
     chunk_overlap: int
+    duplicate_threshold: float
+    cross_type_duplicate_threshold: float
+    prompt_version: str
+
+    def __post_init__(self) -> None:
+        if self.max_upload_bytes < 1:
+            raise ValueError("MAX_UPLOAD_BYTES debe ser mayor que cero.")
+        if self.llm_max_retries < 1:
+            raise ValueError("LLM_MAX_RETRIES debe ser al menos 1.")
+        if self.retrieval_top_k < 1:
+            raise ValueError("RETRIEVAL_TOP_K debe ser mayor que cero.")
+        if self.chunk_size < 300:
+            raise ValueError("CHUNK_SIZE debe ser al menos 300 caracteres.")
+        if self.chunk_overlap < 0 or self.chunk_overlap >= self.chunk_size:
+            raise ValueError("CHUNK_OVERLAP debe estar entre 0 y CHUNK_SIZE - 1.")
+        if self.rrf_lexical_weight < 0 or self.rrf_semantic_weight < 0:
+            raise ValueError("Los pesos RRF no pueden ser negativos.")
+        if self.rrf_lexical_weight + self.rrf_semantic_weight <= 0:
+            raise ValueError("Al menos un peso RRF debe ser mayor que cero.")
+        if not 0 < self.duplicate_threshold <= 1:
+            raise ValueError("DUPLICATE_THRESHOLD debe estar en el intervalo (0, 1].")
+        if not 0 < self.cross_type_duplicate_threshold <= 1:
+            raise ValueError("CROSS_TYPE_DUPLICATE_THRESHOLD debe estar en el intervalo (0, 1].")
+
+    def experimental_snapshot(self) -> dict[str, object]:
+        """Configuración suficiente para interpretar y reproducir una ejecución."""
+        return {
+            "llm": {"model": self.llm_model, "base_url": self.llm_base_url},
+            "embedding": {
+                "model": self.embedding_model,
+                "query_prefix": self.embedding_query_prefix,
+                "passage_prefix": self.embedding_passage_prefix,
+            },
+            "reranker": {"enabled": self.reranker_enabled, "model": self.reranker_model},
+            "retrieval": {
+                "method": "hybrid_rrf",
+                "top_k": self.retrieval_top_k,
+                "lexical_weight": self.rrf_lexical_weight,
+                "semantic_weight": self.rrf_semantic_weight,
+            },
+            "segmentation": {"chunk_size": self.chunk_size, "overlap": self.chunk_overlap},
+            "validation": {
+                "duplicate_threshold": self.duplicate_threshold,
+                "cross_type_duplicate_threshold": self.cross_type_duplicate_threshold,
+            },
+            "prompt_version": self.prompt_version,
+        }
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -67,9 +114,9 @@ class Settings:
         )
         query_prefix = _env("EMBEDDING_QUERY_PREFIX")
         passage_prefix = _env("EMBEDDING_PASSAGE_PREFIX")
-        if not query_prefix and "e5" in embedding_model.lower():
-            query_prefix = "query: "
-            passage_prefix = "passage: "
+        if "e5" in embedding_model.lower():
+            query_prefix = query_prefix or "query: "
+            passage_prefix = passage_prefix or "passage: "
         return cls(
             data_dir=data_dir,
             cors_origins=origins,
@@ -84,11 +131,14 @@ class Settings:
             reranker_enabled=_env_bool("RERANKER_ENABLED", False),
             reranker_model=_env(
                 "RERANKER_MODEL",
-                "cross-encoder/ms-marco-MiniLM-L-6-v2",
+                "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
             ),
             rrf_lexical_weight=_env_float("RRF_LEXICAL_WEIGHT", 0.45),
             rrf_semantic_weight=_env_float("RRF_SEMANTIC_WEIGHT", 0.55),
             retrieval_top_k=_env_int("RETRIEVAL_TOP_K", 24),
             chunk_size=_env_int("CHUNK_SIZE", 1200),
             chunk_overlap=_env_int("CHUNK_OVERLAP", 180),
+            duplicate_threshold=_env_float("DUPLICATE_THRESHOLD", 0.72),
+            cross_type_duplicate_threshold=_env_float("CROSS_TYPE_DUPLICATE_THRESHOLD", 0.55),
+            prompt_version=_env("PROMPT_VERSION", "reqlab-v2"),
         )
