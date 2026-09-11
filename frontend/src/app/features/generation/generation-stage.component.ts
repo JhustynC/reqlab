@@ -1,7 +1,13 @@
-import { Component, OnDestroy, inject, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { ApiService } from '../../core/api.service';
+import {
+  ArtifactType,
+  GenerationBudgetItem,
+  GenerationLimits,
+  GenerationRecommendations,
+} from '../../core/models';
 import { WorkspaceStore } from '../../core/workspace.store';
 import { IconComponent } from '../../shared/icon.component';
 
@@ -13,6 +19,68 @@ import { IconComponent } from '../../shared/icon.component';
       <div class="stage-label"><app-icon name="spark" /> De las fuentes a las propuestas</div>
       <h2>{{ busy() ? 'Construyendo tus artefactos…' : store.artifacts().length ? 'La generación está completa' : 'Todo listo para generar' }}</h2>
       <p class="stage-desc">{{ busy() ? 'Puedes seguir cada etapa del proceso mientras los agentes consultan el corpus del proyecto.' : 'El sistema prepara propuestas de RF, RNF e historias de usuario y comprueba sus referencias. Tú decides qué conservar.' }}</p>
+
+      @if (!busy() && !store.artifacts().length) {
+        <section class="generation-budget" aria-labelledby="generation-budget-title">
+          <header class="generation-budget-head">
+            <div>
+              <span class="eyebrow">Presupuesto adaptativo</span>
+              <h3 id="generation-budget-title">Define el máximo por tipo de artefacto</h3>
+            </div>
+            @if (recommendations()) {
+              <span class="pill outline">{{ recommendations()?.inputs?.fragment_count }} fragmentos analizados</span>
+            }
+          </header>
+          <p class="generation-budget-note">
+            Es un tope, no una cuota: cada agente puede devolver menos elementos si la evidencia no sustenta más.
+          </p>
+
+          @if (loadingRecommendations()) {
+            <div class="budget-loading"><span class="spinner small"></span> Calculando rangos desde el corpus…</div>
+          } @else {
+            @if (recommendationError()) {
+              <div class="alert">
+                {{ recommendationError() }}
+                <button class="btn secondary small" type="button" (click)="retryRecommendations()">Reintentar</button>
+              </div>
+            } @else {
+              <div class="budget-grid">
+                @for (item of budgetTypes; track item.type) {
+                  <article class="budget-card">
+                    <div class="row between">
+                      <div>
+                        <span class="artifact-id">{{ item.type }}</span>
+                        <strong>{{ item.label }}</strong>
+                      </div>
+                      <div class="budget-value"><small>Hasta</small><b>{{ selectedLimit(item.type) }}</b></div>
+                    </div>
+                    <input
+                      type="range"
+                      [min]="recommendationFor(item.type).minimum"
+                      [max]="recommendationFor(item.type).maximum"
+                      [value]="selectedLimit(item.type)"
+                      [attr.aria-label]="'Máximo de ' + item.label"
+                      (input)="setLimit(item.type, $event)"
+                    />
+                    <div class="budget-scale">
+                      <span>Mín. {{ recommendationFor(item.type).minimum }}</span>
+                      <span>Sugerido {{ recommendationFor(item.type).suggested }}</span>
+                      <span>Máx. {{ recommendationFor(item.type).maximum }}</span>
+                    </div>
+                    <small class="budget-evidence">
+                      {{ recommendationFor(item.type).signal_fragments }} fragmentos contienen indicios de {{ item.shortLabel }}.
+                    </small>
+                  </article>
+                }
+              </div>
+              <small class="budget-method">
+                Método {{ recommendations()?.method_version }} · La selección y el cálculo quedarán registrados en la ejecución.
+              </small>
+            }
+          }
+        </section>
+      }
+
       <div class="row between gap"><small class="muted">{{ busy() ? (store.run()?.parameters?.message || 'Ejecución en curso') : store.artifacts().length ? '6 etapas completadas' : (store.sources().length + ' fuentes · definición confirmada') }}</small><span class="pill" [class.purple]="busy()" [class.green]="!busy()">{{ progress() }} %</span></div>
       <div class="progress" role="progressbar" aria-label="Progreso de generación" aria-valuemin="0" aria-valuemax="100" [attr.aria-valuenow]="progress()"><div [style.width.%]="progress()"></div></div>
       <div class="execution">
@@ -28,18 +96,26 @@ import { IconComponent } from '../../shared/icon.component';
       <footer class="stage-footer">
         <small>Las propuestas siempre pasan por revisión humana.</small>
         @if (store.artifacts().length && !busy()) { <button class="btn primary" type="button" (click)="openReview()">Revisar propuestas <app-icon name="arrow" /></button> }
-        @else { <button class="btn primary" type="button" (click)="start()" [disabled]="busy() || !store.project()?.definition_confirmed">@if (busy()) { <span class="spinner small"></span> Generando } @else { <app-icon name="spark" /> Generar propuestas }</button> }
+        @else { <button class="btn primary" type="button" (click)="start()" [disabled]="busy() || loadingRecommendations() || !!recommendationError() || !recommendations() || !store.project()?.definition_confirmed">@if (busy()) { <span class="spinner small"></span> Generando } @else { <app-icon name="spark" /> Generar propuestas }</button> }
       </footer>
     </div>
   `,
 })
-export class GenerationStageComponent implements OnDestroy {
+export class GenerationStageComponent implements OnInit, OnDestroy {
   readonly store = inject(WorkspaceStore);
   private readonly api = inject(ApiService);
   private readonly router = inject(Router);
   readonly busy = signal(false);
-  readonly limit = signal(12);
+  readonly loadingRecommendations = signal(false);
+  readonly recommendationError = signal('');
+  readonly recommendations = signal<GenerationRecommendations | null>(null);
+  readonly limits = signal<GenerationLimits>({ RF: 12, RNF: 12, HU: 12 });
   private timer?: ReturnType<typeof setTimeout>;
+  readonly budgetTypes: Array<{ type: ArtifactType; label: string; shortLabel: string }> = [
+    { type: 'RF', label: 'Requisitos funcionales', shortLabel: 'funcionalidad' },
+    { type: 'RNF', label: 'Requisitos no funcionales', shortLabel: 'calidad o restricción' },
+    { type: 'HU', label: 'Historias de usuario', shortLabel: 'actor y valor' },
+  ];
   readonly steps = [
     { key: 'retrieval', label: 'Recuperación de evidencia', description: 'Seleccionar contexto relevante para cada tipo de artefacto', icon: 'search', order: 1 },
     { key: 'generating_rf', label: 'Requisitos funcionales', description: 'Proponer capacidades observables del sistema', icon: 'layers', order: 2 },
@@ -48,14 +124,63 @@ export class GenerationStageComponent implements OnDestroy {
     { key: 'validation', label: 'Trazabilidad', description: 'Vincular cada propuesta con sus fragmentos fuente', icon: 'link', order: 5 },
     { key: 'completed', label: 'Consistencia', description: 'Identificar aspectos que requieren revisión humana', icon: 'eye', order: 6 },
   ];
-  setLimit(event: Event): void { this.limit.set(Math.max(3, Math.min(20, Number((event.target as HTMLInputElement).value) || 12))); }
+
+  ngOnInit(): void {
+    void this.loadRecommendations();
+  }
+
+  retryRecommendations(): void {
+    void this.loadRecommendations();
+  }
+
+  private async loadRecommendations(): Promise<void> {
+    const project = this.store.project();
+    if (!project?.definition_confirmed || this.store.artifacts().length) return;
+    this.loadingRecommendations.set(true);
+    this.recommendationError.set('');
+    try {
+      const result = await firstValueFrom(this.api.generationRecommendations(project.id));
+      this.recommendations.set(result);
+      this.limits.set({
+        RF: result.limits.RF.suggested,
+        RNF: result.limits.RNF.suggested,
+        HU: result.limits.HU.suggested,
+      });
+    } catch {
+      this.recommendationError.set('No se pudo calcular el rango adaptativo. Puedes continuar con los límites conservadores de respaldo.');
+    } finally {
+      this.loadingRecommendations.set(false);
+    }
+  }
+
+  recommendationFor(type: ArtifactType): GenerationBudgetItem {
+    return this.recommendations()?.limits[type] ?? {
+      minimum: 1,
+      suggested: 12,
+      maximum: 20,
+      signal_fragments: 0,
+      signal_ratio: 0,
+    };
+  }
+
+  selectedLimit(type: ArtifactType): number {
+    return this.limits()[type];
+  }
+
+  setLimit(type: ArtifactType, event: Event): void {
+    const recommendation = this.recommendationFor(type);
+    const raw = Number((event.target as HTMLInputElement).value) || recommendation.suggested;
+    const value = Math.max(recommendation.minimum, Math.min(recommendation.maximum, raw));
+    this.limits.update((current) => ({ ...current, [type]: value }));
+  }
+
   progress(): number { return this.store.run()?.parameters.progress ?? (this.store.artifacts().length ? 100 : 0); }
   openReview(): void { const project = this.store.project(); if (project) void this.router.navigate(['/projects', project.id, 'review']); }
   async start(): Promise<void> {
     const project = this.store.project(); if (!project) return;
     this.busy.set(true); this.store.clearError();
     try {
-      const queued = await firstValueFrom(this.api.startGeneration(project.id, this.limit()));
+      const queued = await firstValueFrom(this.api.startGeneration(project.id, this.limits()));
       await this.poll(queued.run_id);
     } catch (error) { this.store.setError(this.store.message(error)); this.busy.set(false); }
   }

@@ -264,6 +264,125 @@ class WebWorkflowTests(unittest.TestCase):
         retriever = service._retriever("project", [])
         self.assertIs(marker, retriever.reranker)
 
+    def test_generation_uses_and_records_independent_type_budgets(self):
+        project = self.service.create_project("Mesa de ayuda", domain="soporte")
+        self.service.ingest(
+            project["id"],
+            "fuente.txt",
+            b"El operador registra solicitudes y consulta su estado. El sistema conserva su historial.",
+            "text/plain",
+        )
+        self.service.analyze_definition(project["id"])
+        for question in self.repository.list_questions(project["id"]):
+            if question["required"]:
+                self.repository.save_answer(project["id"], question["question_key"], "Respuesta confirmada.")
+        self.service.confirm_definition(project["id"])
+
+        self.service.generate_artifacts(
+            project["id"], limits_by_type={"RF": 2, "RNF": 3, "HU": 4}
+        )
+
+        generation_prompts = [
+            prompt for prompt in self.client.prompts if "Tarea exclusiva del agente" in prompt
+        ]
+        self.assertIn("El valor 2 es un presupuesto máximo", generation_prompts[0])
+        self.assertIn("El valor 3 es un presupuesto máximo", generation_prompts[1])
+        self.assertIn("El valor 4 es un presupuesto máximo", generation_prompts[2])
+        run = self.repository.latest_run(project["id"])
+        self.assertEqual({"RF": 2, "RNF": 3, "HU": 4}, run["parameters"]["generation_limits"])
+        self.assertEqual("evidence-budget-v1", run["parameters"]["generation_budget_method"])
+
+    def test_reconfirming_definition_requires_explicit_reset_and_clears_generation(self):
+        project = self.service.create_project("Mesa de ayuda", domain="soporte")
+        self.service.ingest(
+            project["id"],
+            "fuente.txt",
+            b"El operador registra solicitudes y consulta su estado. El sistema conserva su historial.",
+            "text/plain",
+        )
+        self.service.analyze_definition(project["id"])
+        for question in self.repository.list_questions(project["id"]):
+            if question["required"]:
+                self.repository.save_answer(project["id"], question["question_key"], "Respuesta confirmada.")
+        self.service.confirm_definition(project["id"])
+        self.service.generate_artifacts(project["id"], limit_per_type=3)
+        self.assertTrue(self.repository.list_artifacts(project["id"]))
+
+        with self.assertRaisesRegex(ValueError, "reset_generation"):
+            self.service.confirm_definition(project["id"])
+
+        self.service.confirm_definition(project["id"], reset_generation=True)
+        self.assertEqual([], self.repository.list_artifacts(project["id"]))
+        self.assertIsNone(self.repository.latest_validation_report(project["id"]))
+        self.assertIsNone(self.repository.latest_run(project["id"]))
+        refreshed = self.repository.get_project(project["id"])
+        self.assertTrue(refreshed["definition_confirmed"])
+        self.assertEqual("ready_to_generate", refreshed["status"])
+
+    def test_manual_reclassification_rekeys_artifact_and_updates_relations(self):
+        project = self.service.create_project("Mesa de ayuda", domain="soporte")
+        self.service.ingest(
+            project["id"],
+            "fuente.txt",
+            b"El operador registra solicitudes y consulta su estado. El sistema conserva su historial.",
+            "text/plain",
+        )
+        self.service.analyze_definition(project["id"])
+        for question in self.repository.list_questions(project["id"]):
+            if question["required"]:
+                self.repository.save_answer(project["id"], question["question_key"], "Respuesta confirmada.")
+        self.service.confirm_definition(project["id"])
+        self.service.generate_artifacts(project["id"], limit_per_type=3)
+        artifacts = self.repository.list_artifacts(project["id"])
+        rf = next(item for item in artifacts if item["artifact_type"] == "RF")
+
+        updated = self.service.save_manual_revision(
+            rf["id"],
+            {
+                **rf,
+                "artifact_type": "RNF",
+                "status": "propuesto",
+            },
+        )
+
+        self.assertEqual("RNF", updated["artifact_type"])
+        self.assertEqual("RNF-002", updated["artifact_key"])
+        hu = next(
+            item
+            for item in self.repository.list_artifacts(project["id"])
+            if item["artifact_type"] == "HU"
+        )
+        self.assertEqual(["RNF-002"], hu["related_artifacts"])
+        self.assertEqual("reference_rekey", self.repository.list_versions(hu["id"])[0]["change_origin"])
+
+    def test_bulk_approval_updates_every_artifact_and_preserves_history(self):
+        project = self.service.create_project("Mesa de ayuda", domain="soporte")
+        self.service.ingest(
+            project["id"],
+            "fuente.txt",
+            b"El operador registra solicitudes y consulta su estado. El sistema conserva su historial.",
+            "text/plain",
+        )
+        self.service.analyze_definition(project["id"])
+        for question in self.repository.list_questions(project["id"]):
+            if question["required"]:
+                self.repository.save_answer(project["id"], question["question_key"], "Respuesta confirmada.")
+        self.service.confirm_definition(project["id"])
+        self.service.generate_artifacts(project["id"], limit_per_type=3)
+
+        result = self.service.approve_all_artifacts(project["id"])
+
+        self.assertEqual(3, result["approved_count"])
+        self.assertEqual(3, result["total_count"])
+        self.assertTrue(all(item["status"] == "aceptado" for item in result["artifacts"]))
+        for artifact in result["artifacts"]:
+            versions = self.repository.list_versions(artifact["id"])
+            self.assertEqual("bulk_approval", versions[0]["change_origin"])
+            self.assertEqual("aceptado", versions[0]["snapshot"]["status"])
+
+        second = self.service.approve_all_artifacts(project["id"])
+        self.assertEqual(0, second["approved_count"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -196,8 +196,25 @@ class OpenAICompatibleClient:
             "total_tokens": total_tokens_accum["total_tokens"] or None,
             "attempts": attempts,
             "failed": True,
+            "last_error": self._error_summary(last_error),
         })
-        raise RuntimeError(f"El LLM no devolvió una respuesta válida tras {attempts} intentos.") from last_error
+        detail = self._error_summary(last_error)
+        raise RuntimeError(
+            f"El LLM no devolvió una respuesta válida tras {attempts} intentos. "
+            f"Último rechazo: {detail}"
+        ) from last_error
+
+    @staticmethod
+    def _error_summary(error: Exception | None) -> str:
+        if error is None:
+            return "motivo no disponible"
+        if isinstance(error, ValidationError):
+            details = error.errors(include_url=False, include_input=False)
+            return "; ".join(
+                f"{'.'.join(str(part) for part in item.get('loc', ()))}: {item.get('msg', 'valor inválido')}"
+                for item in details[:8]
+            )[:1200]
+        return re.sub(r"\s+", " ", str(error)).strip()[:1200]
 
 
 

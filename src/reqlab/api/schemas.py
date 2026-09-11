@@ -31,6 +31,10 @@ class DefinitionAnswersUpdate(BaseModel):
     answers: list[DefinitionAnswer]
 
 
+class DefinitionConfirmRequest(BaseModel):
+    reset_generation: bool = False
+
+
 class GenerationLimits(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -62,6 +66,7 @@ class GenerationRequest(BaseModel):
 
 
 class ArtifactUpdate(BaseModel):
+    artifact_type: str | None = Field(default=None, pattern="^(RF|RNF|HU)$")
     title: str = Field(min_length=1, max_length=240)
     description: str = Field(min_length=1, max_length=8000)
     priority: str = Field(pattern="^(Alta|Media|Baja)$")
@@ -69,6 +74,10 @@ class ArtifactUpdate(BaseModel):
     source_fragments: list[str]
     acceptance_criteria: list[str] = Field(default_factory=list)
     related_artifacts: list[str] | None = None
+
+
+class BulkArtifactApproval(BaseModel):
+    confirmed: bool
 
 
 class RevisionRequest(BaseModel):

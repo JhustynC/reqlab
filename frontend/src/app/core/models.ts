@@ -10,6 +10,31 @@ export type WorkflowState =
 export type Phase = 'sources' | 'definition' | 'generation' | 'review' | 'export';
 export type ArtifactType = 'RF' | 'RNF' | 'HU';
 
+export type GenerationLimits = Record<ArtifactType, number>;
+
+export interface GenerationBudgetItem {
+  minimum: number;
+  suggested: number;
+  maximum: number;
+  signal_fragments: number;
+  signal_ratio: number;
+}
+
+export interface GenerationRecommendations {
+  method_version: string;
+  interpretation: string;
+  inputs: {
+    fragment_count: number;
+    document_fragment_count: number;
+    definition_fragment_count: number;
+    character_count: number;
+    evidence_units: number;
+    characters_per_evidence_unit: number;
+  };
+  formula: string;
+  limits: Record<ArtifactType, GenerationBudgetItem>;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -122,6 +147,9 @@ export interface GenerationRun {
     step?: string;
     model?: string;
     retrieval?: string;
+    generation_limits?: GenerationLimits;
+    generation_budget_method?: string;
+    generation_budget_recommendations?: GenerationRecommendations;
     experimental_config?: {
       llm?: { model?: string; base_url?: string };
       embedding?: { model?: string };

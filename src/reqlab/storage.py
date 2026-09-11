@@ -409,6 +409,23 @@ class SQLiteRepository:
                 (now, project_id),
             )
 
+    def reset_generation_results(self, project_id: str) -> None:
+        """Elimina salidas derivadas para iniciar una generación nueva con la definición vigente."""
+        self.get_project(project_id)
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute("DELETE FROM validation_reports WHERE project_id = ?", (project_id,))
+            # artifact_versions y revision_proposals se eliminan por cascada.
+            connection.execute("DELETE FROM artifacts WHERE project_id = ?", (project_id,))
+            connection.execute(
+                "DELETE FROM runs WHERE project_id = ? AND phase = 'generation'", (project_id,)
+            )
+            connection.execute(
+                """UPDATE projects SET status = 'ready_to_generate', updated_at = ?
+                   WHERE id = ?""",
+                (now, project_id),
+            )
+
     def replace_source_fragments(self, source: dict[str, Any], fragments: list[Fragment]) -> None:
         now = utc_now()
         with self.connection() as connection:
@@ -806,13 +823,20 @@ class SQLiteRepository:
         current = self.get_artifact(artifact_id)
         version = int(current["version"]) + 1
         now = utc_now()
+        previous_key = current["artifact_key"]
+        if artifact.artifact_type != current["artifact_type"]:
+            artifact.artifact_id = self.next_artifact_key(
+                current["project_id"], artifact.artifact_type
+            )
         snapshot = artifact.to_dict() | {"version": version}
         with self.connection() as connection:
             connection.execute(
-                """UPDATE artifacts SET title = ?, description = ?, priority = ?, source_fragments_json = ?,
+                """UPDATE artifacts SET artifact_key = ?, artifact_type = ?, title = ?, description = ?, priority = ?, source_fragments_json = ?,
                    status = ?, acceptance_criteria_json = ?, related_artifacts_json = ?,
                    validation_json = '{}', version = ?, updated_at = ? WHERE id = ?""",
                 (
+                    artifact.artifact_id,
+                    artifact.artifact_type,
                     artifact.title,
                     artifact.description,
                     artifact.priority,
@@ -831,7 +855,134 @@ class SQLiteRepository:
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (str(uuid.uuid4()), artifact_id, version, json.dumps(snapshot, ensure_ascii=False), origin, instruction, now),
             )
+            if artifact.artifact_id != previous_key:
+                self._replace_artifact_relation_key(
+                    connection,
+                    current["project_id"],
+                    artifact_id,
+                    previous_key,
+                    artifact.artifact_id,
+                    now,
+                )
+            connection.execute(
+                """UPDATE revision_proposals SET status = 'superseded', decided_at = ?
+                   WHERE artifact_id = ? AND status = 'pending'""",
+                (now, artifact_id),
+            )
         return self.get_artifact(artifact_id)
+
+    def approve_all_artifacts(self, project_id: str) -> int:
+        """Aprueba atómicamente todos los artefactos pendientes y conserva una versión por cambio."""
+        now = utc_now()
+        approved_count = 0
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM artifacts WHERE project_id = ? AND status != 'aceptado'",
+                (project_id,),
+            ).fetchall()
+            for row in rows:
+                version = int(row["version"]) + 1
+                snapshot = {
+                    "artifact_id": row["artifact_key"],
+                    "artifact_type": row["artifact_type"],
+                    "title": row["title"],
+                    "description": row["description"],
+                    "priority": row["priority"],
+                    "source_fragments": json.loads(row["source_fragments_json"] or "[]"),
+                    "status": "aceptado",
+                    "acceptance_criteria": json.loads(row["acceptance_criteria_json"] or "[]"),
+                    "related_artifacts": json.loads(row["related_artifacts_json"] or "[]"),
+                    "version": version,
+                }
+                connection.execute(
+                    """UPDATE artifacts SET status = 'aceptado', version = ?, updated_at = ?
+                       WHERE id = ?""",
+                    (version, now, row["id"]),
+                )
+                connection.execute(
+                    """INSERT INTO artifact_versions
+                       (id, artifact_id, version, snapshot_json, change_origin, change_instruction, created_at)
+                       VALUES (?, ?, ?, ?, 'bulk_approval', ?, ?)""",
+                    (
+                        str(uuid.uuid4()),
+                        row["id"],
+                        version,
+                        json.dumps(snapshot, ensure_ascii=False),
+                        "Aprobación masiva confirmada por el analista.",
+                        now,
+                    ),
+                )
+                connection.execute(
+                    """UPDATE revision_proposals SET status = 'superseded', decided_at = ?
+                       WHERE artifact_id = ? AND status = 'pending'""",
+                    (now, row["id"]),
+                )
+                approved_count += 1
+        return approved_count
+
+    def next_artifact_key(self, project_id: str, artifact_type: str) -> str:
+        if artifact_type not in {"RF", "RNF", "HU"}:
+            raise ValueError("Tipo de artefacto no permitido.")
+        numeric_start = len(artifact_type) + 2
+        with self.connection() as connection:
+            current = connection.execute(
+                """SELECT COALESCE(MAX(CAST(SUBSTR(artifact_key, ?) AS INTEGER)), 0)
+                   FROM artifacts WHERE project_id = ? AND artifact_key LIKE ?""",
+                (numeric_start, project_id, f"{artifact_type}-%"),
+            ).fetchone()[0]
+        return f"{artifact_type}-{int(current) + 1:03d}"
+
+    @staticmethod
+    def _replace_artifact_relation_key(
+        connection: sqlite3.Connection,
+        project_id: str,
+        changed_artifact_id: str,
+        previous_key: str,
+        new_key: str,
+        now: str,
+    ) -> None:
+        rows = connection.execute(
+            "SELECT * FROM artifacts WHERE project_id = ? AND id != ?",
+            (project_id, changed_artifact_id),
+        ).fetchall()
+        for row in rows:
+            relations = json.loads(row["related_artifacts_json"] or "[]")
+            if previous_key not in relations:
+                continue
+            updated_relations = list(
+                dict.fromkeys(new_key if item == previous_key else item for item in relations)
+            )
+            next_version = int(row["version"]) + 1
+            snapshot = {
+                "artifact_id": row["artifact_key"],
+                "artifact_type": row["artifact_type"],
+                "title": row["title"],
+                "description": row["description"],
+                "priority": row["priority"],
+                "source_fragments": json.loads(row["source_fragments_json"] or "[]"),
+                "status": row["status"],
+                "acceptance_criteria": json.loads(row["acceptance_criteria_json"] or "[]"),
+                "related_artifacts": updated_relations,
+                "version": next_version,
+            }
+            connection.execute(
+                """UPDATE artifacts SET related_artifacts_json = ?, validation_json = '{}',
+                   version = ?, updated_at = ? WHERE id = ?""",
+                (json.dumps(updated_relations, ensure_ascii=False), next_version, now, row["id"]),
+            )
+            connection.execute(
+                """INSERT INTO artifact_versions
+                   (id, artifact_id, version, snapshot_json, change_origin, change_instruction, created_at)
+                   VALUES (?, ?, ?, ?, 'reference_rekey', ?, ?)""",
+                (
+                    str(uuid.uuid4()),
+                    row["id"],
+                    next_version,
+                    json.dumps(snapshot, ensure_ascii=False),
+                    f"Referencia actualizada de {previous_key} a {new_key} por reclasificación.",
+                    now,
+                ),
+            )
 
     def get_artifact_by_key(self, project_id: str, artifact_key: str) -> dict[str, Any] | None:
         with self.connection() as connection:

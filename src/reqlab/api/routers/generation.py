@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks
 
+from ...generation_budget import validate_generation_limits
 from ..dependencies import get_repository, get_service
 from ..errors import bad_request, not_found
 from ..schemas import GenerationRequest
@@ -49,7 +50,10 @@ def generate(project_id: str, payload: GenerationRequest, background_tasks: Back
             raise ValueError("La definición del proyecto debe estar confirmada.")
         service = get_service()
         limits_by_type = payload.resolved_limits()
-        run_parameters = service.run_parameters(limits_by_type)
+        recommendations = service.generation_recommendations(project_id)
+        if payload.limits is not None:
+            limits_by_type = validate_generation_limits(limits_by_type, recommendations)
+        run_parameters = service.run_parameters(limits_by_type, recommendations)
         run_parameters.update({
             "progress": 0,
             "step": "queued",

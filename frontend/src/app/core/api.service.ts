@@ -8,6 +8,8 @@ import {
   DefinitionQuestion,
   FragmentDetail,
   FragmentSummary,
+  GenerationLimits,
+  GenerationRecommendations,
   GenerationRun,
   Project,
   RevisionProposal,
@@ -107,19 +109,27 @@ export class ApiService {
       { answers },
     );
   }
-  confirmDefinition(projectId: string): Observable<{ profile: Record<string, unknown> }> {
-    return this.http.post<{ profile: Record<string, unknown> }>(
+  confirmDefinition(
+    projectId: string,
+    resetGeneration = false,
+  ): Observable<{ profile: Record<string, unknown>; generation_reset: boolean }> {
+    return this.http.post<{ profile: Record<string, unknown>; generation_reset: boolean }>(
       `${this.base}/projects/${projectId}/definition/confirm`,
-      {},
+      { reset_generation: resetGeneration },
     );
   }
   startGeneration(
     projectId: string,
-    limitPerType: number,
-  ): Observable<{ run_id: string; status: string }> {
-    return this.http.post<{ run_id: string; status: string }>(
+    limits: GenerationLimits,
+  ): Observable<{ run_id: string; status: string; limits: GenerationLimits }> {
+    return this.http.post<{ run_id: string; status: string; limits: GenerationLimits }>(
       `${this.base}/projects/${projectId}/generation`,
-      { limit_per_type: limitPerType },
+      { limits },
+    );
+  }
+  generationRecommendations(projectId: string): Observable<GenerationRecommendations> {
+    return this.http.get<GenerationRecommendations>(
+      `${this.base}/projects/${projectId}/generation/recommendations`,
     );
   }
   getRun(runId: string): Observable<GenerationRun> {
@@ -136,6 +146,7 @@ export class ApiService {
   }
   updateArtifact(projectId: string, artifact: Artifact): Observable<Artifact> {
     return this.http.put<Artifact>(`${this.base}/projects/${projectId}/artifacts/${artifact.id}`, {
+      artifact_type: artifact.artifact_type,
       title: artifact.title,
       description: artifact.description,
       priority: artifact.priority,
@@ -144,6 +155,14 @@ export class ApiService {
       acceptance_criteria: artifact.acceptance_criteria,
       related_artifacts: artifact.related_artifacts,
     });
+  }
+  approveAllArtifacts(
+    projectId: string,
+  ): Observable<{ approved_count: number; total_count: number; artifacts: Artifact[] }> {
+    return this.http.post<{ approved_count: number; total_count: number; artifacts: Artifact[] }>(
+      `${this.base}/projects/${projectId}/artifacts/approve-all`,
+      { confirmed: true },
+    );
   }
   listVersions(projectId: string, artifactId: string): Observable<Array<Record<string, unknown>>> {
     return this.http.get<Array<Record<string, unknown>>>(

@@ -120,6 +120,27 @@ def normalize_generation_limits(
     return normalized
 
 
+def validate_generation_limits(
+    limits_by_type: dict[str, int],
+    recommendations: dict,
+) -> dict[str, int]:
+    """Valida la selección de la interfaz contra el rango adaptativo calculado."""
+    limits = normalize_generation_limits(limits_by_type)
+    recommended_limits = recommendations.get("limits", {})
+    for artifact_type, value in limits.items():
+        item = recommended_limits.get(artifact_type)
+        if not item:
+            raise ValueError(f"No existe una recomendación para {artifact_type}.")
+        minimum = int(item["minimum"])
+        maximum = int(item["maximum"])
+        if not minimum <= value <= maximum:
+            raise ValueError(
+                f"El máximo de {artifact_type} debe estar entre {minimum} y {maximum} "
+                "para el corpus actual."
+            )
+    return limits
+
+
 def _normalize(value: str) -> str:
     decomposed = unicodedata.normalize("NFKD", value.lower())
     plain = "".join(character for character in decomposed if not unicodedata.combining(character))

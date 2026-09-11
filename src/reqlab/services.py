@@ -8,6 +8,11 @@ from typing import Any, Callable
 
 from .agents import ProjectDefinitionAgent, RevisionAgent, SpecializedGenerationAgent, CONTRACTS
 from .documents import DocumentExtractionService, TextSegmentationService, safe_filename
+from .generation_budget import (
+    normalize_generation_limits,
+    recommend_generation_budgets,
+    validate_generation_limits,
+)
 from .llm import DeepSeekClient
 from .models import Artifact
 from .settings import Settings
@@ -199,14 +204,25 @@ class ProjectApplicationService:
         )
         return analysis
 
-    def confirm_definition(self, project_id: str) -> dict[str, Any]:
+    def confirm_definition(
+        self, project_id: str, reset_generation: bool = False
+    ) -> dict[str, Any]:
         questions = self.repository.list_questions(project_id)
         provisional = self.repository.get_profile(project_id)
-        if not provisional or "provisional_profile" not in provisional.get("profile", {}):
+        stored_profile = provisional.get("profile", {}) if provisional else {}
+        if not provisional or not (
+            "provisional_profile" in stored_profile or "analysis_coverage" in stored_profile
+        ):
             raise ValueError("Primero debe analizar el corpus y revisar la interpretación provisional.")
         missing = [item["question"] for item in questions if item["required"] and not item["answer"].strip()]
         if missing:
             raise ValueError(f"Faltan {len(missing)} respuestas obligatorias antes de confirmar la definición.")
+        existing_artifacts = self.repository.list_artifacts(project_id)
+        if existing_artifacts and not reset_generation:
+            raise ValueError(
+                "Este proyecto ya contiene artefactos generados. Confirme explícitamente "
+                "reset_generation para eliminar la generación, sus versiones y observaciones antes de continuar."
+            )
         profile = {
             "project_goal": self._definition_value(questions, "DEF-OBJ", "project_goal"),
             "problem": self._definition_value(questions, "DEF-PROBLEM", "problem"),
@@ -227,7 +243,9 @@ class ProjectApplicationService:
                 for item in questions
             ],
             "pending_questions": [],
-            "analysis_coverage": provisional["profile"].get("coverage", {}),
+            "analysis_coverage": stored_profile.get(
+                "coverage", stored_profile.get("analysis_coverage", {})
+            ),
         }
         previous_definition_ids = [
             fragment.fragment_id
@@ -235,6 +253,8 @@ class ProjectApplicationService:
             if fragment.source_id == "USR-DEF"
         ]
         definition_fragments = self.repository.upsert_definition_fragments(project_id, questions)
+        if existing_artifacts:
+            self.repository.reset_generation_results(project_id)
         self.repository.save_profile(project_id, profile, confirmed=True)
         self.vector_store.delete_fragments(project_id, previous_definition_ids)
         self.vector_store.upsert_fragments(project_id, definition_fragments)
@@ -243,9 +263,10 @@ class ProjectApplicationService:
     def generate_artifacts(
         self,
         project_id: str,
-        limit_per_type: int = 15,
+        limit_per_type: int | None = None,
         run_id: str | None = None,
         progress_callback: Callable[[int, str, str], None] | None = None,
+        limits_by_type: dict[str, int] | None = None,
     ) -> dict[str, Any]:
         project = self.repository.get_project(project_id)
         if not project["definition_confirmed"]:
@@ -253,6 +274,10 @@ class ProjectApplicationService:
         fragments = self.repository.list_fragments(project_id)
         if not fragments:
             raise ValueError("El proyecto no contiene fragmentos indexados.")
+        limits = normalize_generation_limits(limits_by_type, fallback=limit_per_type or 12)
+        recommendations = recommend_generation_budgets(fragments)
+        if limits_by_type is not None:
+            limits = validate_generation_limits(limits, recommendations)
         if not self.vector_store.has_project(project_id):
             # Migración segura al espacio del modelo de embeddings configurado.
             self.vector_store.upsert_fragments(project_id, fragments)
@@ -264,7 +289,7 @@ class ProjectApplicationService:
             project_id,
             "generation",
             "orchestrator.main",
-            self.run_parameters(limit_per_type),
+            self.run_parameters(limits, recommendations),
         )
         progress = progress_callback or (lambda _percent, _message, _step: None)
         self.repository.update_project_status(project_id, "generating")
@@ -274,7 +299,10 @@ class ProjectApplicationService:
                 contract = CONTRACTS[artifact_type]
                 progress(15 + (position - 1) * 24, f"Ejecutando {contract.agent_id}", f"generating_{artifact_type.lower()}")
                 child_run_id = self.repository.start_run(
-                    project_id, "generation", contract.agent_id, self.run_parameters(limit_per_type)
+                    project_id,
+                    "generation",
+                    contract.agent_id,
+                    self.run_parameters(limits, recommendations, artifact_type),
                 )
                 try:
                     agent = SpecializedGenerationAgent(
@@ -286,7 +314,9 @@ class ProjectApplicationService:
                         retrieval_top_k=self.settings.retrieval_top_k if self.settings else 24,
                     )
                     # Se inyectan los artefactos ya generados para asegurar coherencia y evitar redundancias cross-type
-                    generated, evidence = agent.generate(limit=limit_per_type, existing_artifacts=list(artifacts))
+                    generated, evidence = agent.generate(
+                        limit=limits[artifact_type], existing_artifacts=list(artifacts)
+                    )
                     artifacts.extend(generated)
                     score_name = "reranker_score" if self.reranker else "rrf_score"
                     retrieval_log[artifact_type] = [
@@ -297,7 +327,14 @@ class ProjectApplicationService:
                     telemetry_log[artifact_type] = agent_metrics
                     self.repository.finish_run(child_run_id, "completed", metrics=agent_metrics)
                 except Exception as error:
-                    self.repository.finish_run(child_run_id, "failed", str(error))
+                    failure_metrics = (
+                        self.client.get_last_telemetry()
+                        if hasattr(self.client, "get_last_telemetry")
+                        else None
+                    )
+                    self.repository.finish_run(
+                        child_run_id, "failed", str(error), metrics=failure_metrics
+                    )
                     raise
             progress(88, "Validando trazabilidad y consistencia", "validation")
             report = TraceabilityConsistencyAgent(
@@ -314,10 +351,19 @@ class ProjectApplicationService:
             total_latency = sum(item.get("latency_ms", 0.0) for item in telemetry_log.values())
             total_tokens = sum(item.get("total_tokens", 0) or 0 for item in telemetry_log.values())
             total_attempts = sum(item.get("attempts", 1) for item in telemetry_log.values())
+            generated_counts = {
+                artifact_type: sum(1 for artifact in artifacts if artifact.artifact_type == artifact_type)
+                for artifact_type in ("RF", "RNF", "HU")
+            }
             summary_metrics = {
                 "total_latency_ms": round(total_latency, 2),
                 "total_tokens": total_tokens or None,
                 "total_attempts": total_attempts,
+                "generated_counts": generated_counts,
+                "budget_saturation": {
+                    artifact_type: generated_counts[artifact_type] >= limits[artifact_type]
+                    for artifact_type in generated_counts
+                },
                 "agents": telemetry_log,
             }
             self.repository.finish_run(parent_run, "completed", metrics=summary_metrics)
@@ -361,9 +407,12 @@ class ProjectApplicationService:
 
     def save_manual_revision(self, artifact_id: str, values: dict[str, Any]) -> dict[str, Any]:
         current = self.repository.get_artifact(artifact_id)
+        target_type = str(values.get("artifact_type") or current["artifact_type"])
+        if target_type not in {"RF", "RNF", "HU"}:
+            raise ValueError("El tipo de artefacto debe ser RF, RNF o HU.")
         artifact = Artifact(
             artifact_id=current["artifact_key"],
-            artifact_type=current["artifact_type"],
+            artifact_type=target_type,
             title=str(values.get("title", current["title"])).strip(),
             description=str(values.get("description", current["description"])).strip(),
             priority=str(values.get("priority", current["priority"])),
@@ -376,9 +425,27 @@ class ProjectApplicationService:
                 else values["related_artifacts"]
             ),
         )
-        updated = self.repository.update_artifact(artifact_id, artifact, "manual_revision")
+        origin = (
+            "manual_reclassification"
+            if target_type != current["artifact_type"]
+            else "manual_revision"
+        )
+        updated = self.repository.update_artifact(artifact_id, artifact, origin)
         self._refresh_validation(updated["project_id"])
         return self.repository.get_artifact(artifact_id)
+
+    def approve_all_artifacts(self, project_id: str) -> dict[str, Any]:
+        self.repository.get_project(project_id)
+        artifacts = self.repository.list_artifacts(project_id)
+        if not artifacts:
+            raise ValueError("El proyecto todavía no tiene artefactos para aprobar.")
+        approved_count = self.repository.approve_all_artifacts(project_id)
+        self._refresh_validation(project_id)
+        return {
+            "approved_count": approved_count,
+            "total_count": len(artifacts),
+            "artifacts": self.repository.list_artifacts(project_id),
+        }
 
     def _refresh_validation(self, project_id: str) -> None:
         artifacts = [
@@ -403,10 +470,27 @@ class ProjectApplicationService:
             reranker=self.reranker,
         )
 
-    def run_parameters(self, limit_per_type: int) -> dict[str, Any]:
+    def generation_recommendations(self, project_id: str) -> dict[str, Any]:
+        project = self.repository.get_project(project_id)
+        if not project["definition_confirmed"]:
+            raise ValueError("La definición del proyecto debe estar confirmada.")
+        return recommend_generation_budgets(self.repository.list_fragments(project_id))
+
+    def run_parameters(
+        self,
+        limits_by_type: dict[str, int] | int,
+        recommendations: dict[str, Any] | None = None,
+        active_artifact_type: str | None = None,
+    ) -> dict[str, Any]:
+        if isinstance(limits_by_type, int):
+            limits = normalize_generation_limits(fallback=limits_by_type)
+        else:
+            limits = normalize_generation_limits(limits_by_type)
         parameters: dict[str, Any] = {
             "model": self.client.model,
-            "limit_per_type": limit_per_type,
+            "generation_limits": limits,
+            "generation_budget_method": (recommendations or {}).get("method_version"),
+            "generation_budget_recommendations": recommendations,
             "retrieval": "hybrid_rrf",
             "generation_order": ["RF", "RNF", "HU"],
             "agent_retrieval_queries": {
@@ -414,6 +498,11 @@ class ProjectApplicationService:
                 for artifact_type, contract in CONTRACTS.items()
             },
         }
+        if len(set(limits.values())) == 1:
+            parameters["limit_per_type"] = next(iter(limits.values()))
+        if active_artifact_type:
+            parameters["active_artifact_type"] = active_artifact_type
+            parameters["active_limit"] = limits[active_artifact_type]
         if self.settings:
             parameters["experimental_config"] = self.settings.experimental_snapshot()
         return parameters

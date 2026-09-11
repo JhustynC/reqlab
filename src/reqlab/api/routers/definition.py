@@ -4,7 +4,7 @@ from fastapi import APIRouter
 
 from ..dependencies import get_repository, get_service
 from ..errors import bad_request, not_found
-from ..schemas import DefinitionAnswersUpdate
+from ..schemas import DefinitionAnswersUpdate, DefinitionConfirmRequest
 
 
 router = APIRouter(prefix="/projects/{project_id}/definition", tags=["definition"])
@@ -48,9 +48,14 @@ def save_answers(project_id: str, payload: DefinitionAnswersUpdate) -> dict:
 
 
 @router.post("/confirm")
-def confirm(project_id: str) -> dict:
+def confirm(project_id: str, payload: DefinitionConfirmRequest) -> dict:
     try:
-        return {"profile": get_service().confirm_definition(project_id)}
+        return {
+            "profile": get_service().confirm_definition(
+                project_id, reset_generation=payload.reset_generation
+            ),
+            "generation_reset": payload.reset_generation,
+        }
     except KeyError as error:
         raise not_found(error) from error
     except (ValueError, RuntimeError) as error:

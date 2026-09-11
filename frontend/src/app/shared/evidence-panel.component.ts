@@ -173,7 +173,7 @@ import { IconComponent } from './icon.component';
             <button
               class="result-tile blue"
               type="button"
-              (click)="openReview()"
+              (click)="openReview(undefined, 'trace')"
               [disabled]="!ready()"
             >
               <span class="row"
@@ -183,7 +183,7 @@ import { IconComponent } from './icon.component';
             <button
               class="result-tile sand"
               type="button"
-              (click)="openReview()"
+              (click)="openReview(undefined, 'alerts')"
               [disabled]="!ready()"
             >
               <span class="row"
@@ -253,7 +253,13 @@ import { IconComponent } from './icon.component';
             ×
           </button>
           <h2>Editar {{ artifact.artifact_key }}</h2>
-          <p>El cambio creará una versión y devolverá el artefacto al estado Propuesto.</p>
+          <p>El cambio creará una versión y devolverá el artefacto al estado Propuesto. Si cambias su tipo, ReqLab asignará un identificador coherente y actualizará las relaciones existentes.</p>
+          <label class="form-label gap" for="edit-type">Tipo de artefacto</label>
+          <select id="edit-type" name="artifactType" [(ngModel)]="draft.artifact_type">
+            <option value="RF">Requisito funcional (RF)</option>
+            <option value="RNF">Requisito no funcional (RNF)</option>
+            <option value="HU">Historia de usuario (HU)</option>
+          </select>
           <label class="form-label gap" for="edit-title">Título</label
           ><input id="edit-title" name="title" [(ngModel)]="draft.title" />
           <label class="form-label gap" for="edit-text">Redacción del artefacto</label
@@ -333,7 +339,11 @@ export class EvidencePanelComponent {
   readonly assisting = signal(false);
   readonly busy = signal(false);
   instruction = '';
-  draft = { title: '', description: '' };
+  draft: { artifact_type: Artifact['artifact_type']; title: string; description: string } = {
+    artifact_type: 'RF',
+    title: '',
+    description: '',
+  };
 
   constructor() {
     effect(() => {
@@ -376,11 +386,11 @@ export class EvidencePanelComponent {
       return 'Confirma la definición antes de iniciar la generación.';
     return 'Inicia la generación para obtener propuestas trazables.';
   }
-  openReview(type?: string): void {
+  openReview(type?: string, tab: 'artifacts' | 'trace' | 'alerts' | 'run' = 'artifacts'): void {
     const project = this.store.project();
     if (project)
       void this.router.navigate(['/projects', project.id, 'review'], {
-        queryParams: type ? { type } : undefined,
+        queryParams: { tab, ...(type ? { type } : {}) },
       });
   }
   openExport(): void {
@@ -396,7 +406,11 @@ export class EvidencePanelComponent {
     if (artifact) this.store.selectArtifact(artifact);
   }
   beginEdit(artifact: Artifact): void {
-    this.draft = { title: artifact.title, description: artifact.description };
+    this.draft = {
+      artifact_type: artifact.artifact_type,
+      title: artifact.title,
+      description: artifact.description,
+    };
     this.editing.set(true);
   }
   async loadVersions(artifact: Artifact): Promise<void> {
@@ -418,6 +432,9 @@ export class EvidencePanelComponent {
         {
           generation: 'Propuesta inicial',
           manual_revision: 'Edición manual',
+          manual_reclassification: 'Reclasificación manual',
+          reference_rekey: 'Relación actualizada',
+          bulk_approval: 'Aprobación masiva',
           ai_revision: 'Edición asistida',
         } as Record<string, string>
       )[String(origin)] ?? String(origin ?? 'Cambio')
@@ -429,6 +446,7 @@ export class EvidencePanelComponent {
   async saveEdit(artifact: Artifact): Promise<void> {
     await this.update({
       ...artifact,
+      artifact_type: this.draft.artifact_type,
       title: this.draft.title.trim(),
       description: this.draft.description.trim(),
       status: 'propuesto',

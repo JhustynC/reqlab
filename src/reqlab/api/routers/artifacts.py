@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query
 
 from ..dependencies import get_repository, get_service
 from ..errors import bad_request, not_found
-from ..schemas import ArtifactUpdate, RevisionDecision, RevisionRequest
+from ..schemas import ArtifactUpdate, BulkArtifactApproval, RevisionDecision, RevisionRequest
 
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["artifacts"])
@@ -26,6 +26,18 @@ def update_artifact(project_id: str, artifact_id: str, payload: ArtifactUpdate) 
         if artifact["project_id"] != project_id:
             raise KeyError("El artefacto no pertenece al proyecto indicado.")
         return get_service().save_manual_revision(artifact_id, payload.model_dump())
+    except KeyError as error:
+        raise not_found(error) from error
+    except ValueError as error:
+        raise bad_request(error) from error
+
+
+@router.post("/artifacts/approve-all")
+def approve_all_artifacts(project_id: str, payload: BulkArtifactApproval) -> dict:
+    try:
+        if not payload.confirmed:
+            raise ValueError("La aprobación masiva requiere confirmación explícita.")
+        return get_service().approve_all_artifacts(project_id)
     except KeyError as error:
         raise not_found(error) from error
     except ValueError as error:
@@ -76,4 +88,3 @@ def latest_validation(project_id: str) -> dict:
         return get_repository().latest_validation_report(project_id) or {"report": None, "created_at": None}
     except KeyError as error:
         raise not_found(error) from error
-

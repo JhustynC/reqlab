@@ -49,6 +49,16 @@ class _RetryClient(OpenAICompatibleClient):
         return {"values": [] if self.calls == 1 else ["ok"]}
 
 
+class _AlwaysInvalidClient(OpenAICompatibleClient):
+    def __init__(self):
+        super().__init__(api_key="test", max_retries=1)
+
+    def complete_json(self, *args, **kwargs):
+        del args, kwargs
+        self._set_telemetry({"latency_ms": 1, "attempts": 1})
+        return {"values": []}
+
+
 class _Retriever:
     def __init__(self):
         self.top_k = 0
@@ -94,6 +104,12 @@ class RagImprovementTests(unittest.TestCase):
         self.assertEqual(20, client.get_last_telemetry()["latency_ms"])
         self.assertEqual(10, client.get_last_telemetry()["total_tokens"])
 
+    def test_final_validation_failure_exposes_a_safe_specific_reason(self):
+        client = _AlwaysInvalidClient()
+        with self.assertRaisesRegex(RuntimeError, "values"):
+            client.complete_json_validated("system", "user", _ValidatedPayload)
+        self.assertIn("values", client.get_last_telemetry()["last_error"])
+
     def test_generation_does_not_bypass_failed_validation(self):
         client = _FailingValidatedClient()
         agent = SpecializedGenerationAgent(CONTRACTS["RF"], _Retriever(), client, "Project", "Domain")
@@ -120,6 +136,29 @@ class RagImprovementTests(unittest.TestCase):
             CONTRACTS["RF"], retriever, LegacyClient(), "Project", "Domain", retrieval_top_k=7
         ).generate(limit=3)
         self.assertEqual(7, retriever.top_k)
+
+    def test_generation_prompt_uses_real_allowed_identifiers(self):
+        retriever = _Retriever()
+
+        class CapturingClient:
+            model = "fake"
+            configured = True
+            prompt = ""
+
+            def complete_json(self, **kwargs):
+                self.prompt = kwargs["user_prompt"]
+                return {"artifacts": [{
+                    "title": "Registro",
+                    "description": "El sistema deberá registrar solicitudes.",
+                    "source_fragments": ["SRC-001-F001"],
+                    "related_artifacts": [],
+                }]}
+
+        client = CapturingClient()
+        SpecializedGenerationAgent(CONTRACTS["RF"], retriever, client, "Project", "Domain").generate(limit=3)
+        self.assertIn('"source_fragments": ["SRC-001-F001"]', client.prompt)
+        self.assertIn("Si la lista está vacía, usa related_artifacts: []", client.prompt)
+        self.assertNotIn("identificador exacto de un fragmento", client.prompt)
 
     def test_email_segmentation_uses_email_structure(self):
         fragments = TextSegmentationService(chunk_size=300, overlap=20).segment(

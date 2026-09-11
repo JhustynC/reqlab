@@ -15,6 +15,8 @@ Extraer, segmentar e indexar las fuentes
       ↓
 Revisar la interpretación provisional y responder solo las aclaraciones necesarias
       ↓
+Revisar y, si se desea, ajustar el presupuesto adaptativo por tipo
+      ↓
 Generar RF, RNF y HU mediante agentes especializados
       ↓
 Validar trazabilidad, formato y posibles duplicados
@@ -25,6 +27,8 @@ Exportar DOCX o JSON
 ```
 
 El agente de definición recorre todos los fragmentos del proyecto mediante análisis jerárquico por lotes. Primero obtiene hallazgos trazables, después construye un perfil provisional editable y formula preguntas únicamente para información ausente o dudosa, contradicciones y decisiones relevantes. Las respuestas confirmadas se almacenan como fragmentos `USR-DEF-*`, por lo que pueden citarse como evidencia sin confundirse con las fuentes originales.
+
+Si una definición se confirma nuevamente después de haber generado resultados, la aplicación solicita confirmación antes de eliminar la generación anterior. Al aceptar se conservan fuentes y respuestas, pero se reinician artefactos, versiones, observaciones y ejecuciones para impedir que convivan salidas producidas desde definiciones distintas.
 
 ## Persistencia
 
@@ -37,6 +41,10 @@ El agente de definición recorre todos los fragmentos del proyecto mediante aná
 La recuperación es híbrida: combina TF-IDF y similitud vectorial mediante Reciprocal Rank Fusion, con reranking multilingüe opcional. Los embeddings se calculan localmente con `sentence-transformers`; DeepSeek es el proveedor LLM validado para interpretar el corpus, generar preguntas adaptativas y artefactos, y proponer revisiones.
 
 Cada ejecución conserva una instantánea de su configuración técnica. Los resultados incluyen relaciones explícitas RF–RNF–HU, validación por artefacto y vínculos separados hacia la evidencia documental. Angular presenta esta información en las vistas de revisión, trazabilidad, observaciones y ejecución.
+
+Las observaciones son alertas, no decisiones automáticas. Cada una permite abrir el artefacto afectado para editarlo, reclasificarlo, cambiar su estado o solicitar una propuesta asistida. Una reclasificación crea una nueva versión, asigna una clave acorde con el nuevo tipo y actualiza las relaciones internas que utilizaban la clave anterior.
+
+Antes de generar, la API calcula para RF, RNF y HU un intervalo operativo a partir del volumen de evidencia y de indicios lingüísticos generales presentes en los fragmentos. Angular muestra el mínimo, el valor sugerido y el máximo mediante controles deslizantes independientes. El valor seleccionado es un **tope de salida**, no una cuota ni una estimación del número real de requisitos: los agentes deben devolver menos elementos cuando la evidencia no sustente más. La recomendación, el método utilizado y la selección del usuario quedan registrados en la ejecución.
 
 ## Ejecución con Docker
 
@@ -107,6 +115,7 @@ python -m unittest discover -s tests -v
 - `documents.py`: extracción y segmentación de fuentes.
 - `vector_store.py`: ChromaDB, embeddings y recuperación híbrida.
 - `agents.py`: contratos de los agentes RF, RNF, HU, definición y revisión.
+- `generation_budget.py`: cálculo versionado del presupuesto adaptativo de generación.
 - `services.py`: casos de uso y orquestación del flujo.
 - `validation.py`: controles deterministas de trazabilidad y consistencia.
 - `exporters.py`: exportación a Word.

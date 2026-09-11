@@ -136,6 +136,9 @@ class SpecializedGenerationAgent:
 
         if hasattr(self.client, "get_last_telemetry"):
             self.last_telemetry = self.client.get_last_telemetry()
+        self.last_telemetry["returned_artifacts"] = len(records)
+        self.last_telemetry["accepted_artifacts"] = min(len(records), limit)
+        self.last_telemetry["truncated_to_budget"] = len(records) > limit
 
         artifacts = [
             Artifact.from_dict(self._normalize_record(item, index), self.contract.artifact_type, index)
@@ -157,22 +160,26 @@ class SpecializedGenerationAgent:
         context = "\n\n".join(
             f"[{fragment.fragment_id}] {fragment.heading}\n{fragment.text}" for fragment, _ in evidence
         )
+        allowed_citations = [fragment.fragment_id for fragment, _ in evidence]
+        allowed_relations = [artifact.artifact_id for artifact in existing_artifacts]
         schema = {
             "artifact_id": f"{self.contract.artifact_type}-001",
             "title": "Título breve",
             "description": "Enunciado completo",
             "priority": "Alta|Media|Baja",
-            "source_fragments": ["identificador exacto de un fragmento"],
+            "source_fragments": [allowed_citations[0]],
             "status": "propuesto|requiere aclaración",
-            "acceptance_criteria": ["Criterio verificable; obligatorio para HU"],
-            "related_artifacts": ["RF-001; solo identificadores previos relacionados"],
+            "acceptance_criteria": (
+                ["Criterio verificable"] if self.contract.artifact_type == "HU" else []
+            ),
+            "related_artifacts": allowed_relations[:1],
         }
         rules = "\n".join(f"- {rule}" for rule in self.contract.quality_rules)
 
         coherence_section = ""
         if existing_artifacts:
-            # Se preservan todos los artefactos previos dentro de los límites del
-            # experimento (máximo 20 por tipo), evitando truncar RNF al generar HU.
+            # Se preservan todos los artefactos previos dentro de los presupuestos
+            # configurados, evitando truncar RNF al generar HU.
             summary_lines = [
                 f"- [{a.artifact_id} ({a.artifact_type}); estado={a.status}] {a.title}: {a.description}"
                 for a in existing_artifacts
@@ -205,10 +212,14 @@ Reglas especializadas:
 {rules}
 
 Reglas comunes:
-- Genera como máximo {limit} artefactos sin duplicados.
+- El valor {limit} es un presupuesto máximo, no una cuota que debas completar.
+- Genera únicamente artefactos sustentados por la evidencia y devuelve menos de {limit} si no existe información suficiente.
+- No dividas, repitas ni inventes artefactos para alcanzar el máximo disponible.
 - Usa solamente la evidencia proporcionada.
 - Cada artefacto debe citar uno o más identificadores exactos presentes en el contexto.
+- Identificadores de cita permitidos: {json.dumps(allowed_citations, ensure_ascii=False)}.
 - source_fragments solo puede contener evidencia documental; no cites identificadores RF/RNF/HU como fuentes.
+- Identificadores de relación permitidos: {json.dumps(allowed_relations, ensure_ascii=False)}. Si la lista está vacía, usa related_artifacts: [].
 - related_artifacts solo puede contener identificadores RF/RNF/HU mostrados en la sección de coherencia.
 - Si falta información, conserva la incertidumbre y usa el estado 'requiere aclaración'.
 - No resuelvas contradicciones mediante suposiciones.
