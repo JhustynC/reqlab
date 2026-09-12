@@ -65,7 +65,7 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
               (click)="filter.set(item)"
               [attr.aria-pressed]="filter() === item"
             >
-              {{ item }}
+              {{ filterLabel(item) }}
             </button>
           }
         </div>
@@ -501,6 +501,16 @@ export class ReviewStageComponent implements OnInit {
   }
   remainingApprovalCount(): number {
     return this.store.artifacts().filter((item) => item.status !== 'aceptado').length;
+  }
+  filterLabel(item: ArtifactFilter): string {
+    const counts = this.store.counts();
+    const count =
+      item === 'Todos'
+        ? this.store.artifacts().length
+        : item === 'Aprobados'
+          ? this.store.artifacts().filter((artifact) => artifact.status === 'aceptado').length
+          : counts[item];
+    return `${item} (${count})`;
   }
   openView(tab: ReviewTab, type?: 'RF' | 'RNF' | 'HU'): void {
     const project = this.store.project();

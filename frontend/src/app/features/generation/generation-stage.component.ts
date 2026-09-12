@@ -87,7 +87,7 @@ import { IconComponent } from '../../shared/icon.component';
         @for (step of steps; track step.key) {
           <div class="execution-step" [class.done]="stepDone(step.order)" [class.active]="store.run()?.parameters?.step === step.key && busy()">
             <span class="status-icon">@if (stepDone(step.order)) { <app-icon name="check" /> } @else { {{ step.order }} }</span>
-            <div class="grow"><strong>{{ step.label }}</strong><small>{{ step.description }}</small></div>
+            <div class="grow"><strong>{{ stepLabel(step) }}</strong><small>{{ step.description }}</small></div>
             @if (store.run()?.parameters?.step === step.key && busy()) { <span class="pill green">En curso</span> } @else if (stepDone(step.order)) { <small class="muted">Listo</small> } @else { <app-icon [name]="step.icon" /> }
           </div>
         }
@@ -201,6 +201,19 @@ export class GenerationStageComponent implements OnInit, OnDestroy {
     if (!this.busy() && this.store.artifacts().length > 0) return true;
     const current = this.steps.find((item) => item.key === this.store.run()?.parameters.step)?.order ?? 0;
     return order < current || this.store.run()?.status === 'completed';
+  }
+  stepLabel(step: { key: string; label: string }): string {
+    const type =
+      step.key === 'generating_rf'
+        ? 'RF'
+        : step.key === 'generating_rnf'
+          ? 'RNF'
+          : step.key === 'generating_hu'
+            ? 'HU'
+            : null;
+    return type && this.store.artifacts().length > 0
+      ? `${step.label} (${this.store.counts()[type]})`
+      : step.label;
   }
   ngOnDestroy(): void { if (this.timer) clearTimeout(this.timer); }
 }

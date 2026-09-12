@@ -110,7 +110,7 @@ class Settings:
         llm_model = _env("LLM_MODEL") or _env("DEEPSEEK_MODEL") or "deepseek-chat"
         embedding_model = _env(
             "EMBEDDING_MODEL",
-            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+            "intfloat/multilingual-e5-base",
         )
         query_prefix = _env("EMBEDDING_QUERY_PREFIX")
         passage_prefix = _env("EMBEDDING_PASSAGE_PREFIX")
@@ -135,7 +135,7 @@ class Settings:
             ),
             rrf_lexical_weight=_env_float("RRF_LEXICAL_WEIGHT", 0.45),
             rrf_semantic_weight=_env_float("RRF_SEMANTIC_WEIGHT", 0.55),
-            retrieval_top_k=_env_int("RETRIEVAL_TOP_K", 24),
+            retrieval_top_k=_env_int("RETRIEVAL_TOP_K", 12),
             chunk_size=_env_int("CHUNK_SIZE", 1200),
             chunk_overlap=_env_int("CHUNK_OVERLAP", 180),
             duplicate_threshold=_env_float("DUPLICATE_THRESHOLD", 0.72),

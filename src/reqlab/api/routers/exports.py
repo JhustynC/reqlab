@@ -21,9 +21,12 @@ def filename(project_name: str, suffix: str) -> str:
 @router.get("/json")
 def export_json(project_id: str) -> Response:
     try:
-        project = get_repository().get_project(project_id)
+        repository = get_repository()
+        project = repository.get_project(project_id)
+        content = project_export_json(repository, project_id)
+        repository.update_project_status(project_id, "exported")
         return Response(
-            project_export_json(get_repository(), project_id),
+            content,
             media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="{filename(project["name"], "json")}"'},
         )
@@ -34,8 +37,10 @@ def export_json(project_id: str) -> Response:
 @router.get("/docx")
 def export_docx(project_id: str) -> Response:
     try:
-        project = get_repository().get_project(project_id)
-        content = build_docx(project_export_payload(get_repository(), project_id))
+        repository = get_repository()
+        project = repository.get_project(project_id)
+        content = build_docx(project_export_payload(repository, project_id))
+        repository.update_project_status(project_id, "exported")
         return Response(
             content,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -43,4 +48,3 @@ def export_docx(project_id: str) -> Response:
         )
     except KeyError as error:
         raise not_found(error) from error
-

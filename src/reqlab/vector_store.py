@@ -99,7 +99,9 @@ class ChromaProjectVectorStore:
         except ImportError as error:
             raise RuntimeError("La dependencia chromadb no está instalada.") from error
         self.embedding_provider = embedding_provider or SentenceTransformerEmbeddingProvider(
-            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+            "intfloat/multilingual-e5-base",
+            query_prefix="query: ",
+            passage_prefix="passage: ",
         )
         path = Path(persistence_path)
         path.mkdir(parents=True, exist_ok=True)
