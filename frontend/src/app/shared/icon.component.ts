@@ -9,6 +9,7 @@ import { Component, input } from '@angular/core';
         @case ('file') { <path d="M14 2H5v20h14V7l-5-5Z" /><path d="M14 2v6h5M8 12h8M8 16h6" /> }
         @case ('search') { <circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /> }
         @case ('arrow') { <path d="M4 12h16m-6-6 6 6-6 6" /> }
+        @case ('chevron-down') { <path d="m6 9 6 6 6-6" /> }
         @case ('back') { <path d="M20 12H4m6-6-6 6 6 6" /> }
         @case ('upload') { <path d="M12 16V3m-5 5 5-5 5 5M4 15v6h16v-6" /> }
         @case ('check') { <path d="m5 12 4 4L19 6" /> }

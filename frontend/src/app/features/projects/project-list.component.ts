@@ -1,4 +1,4 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { Project } from '../../core/models';
@@ -11,13 +11,13 @@ import { TopbarComponent } from '../../shared/topbar.component';
   imports: [FormsModule, IconComponent, TopbarComponent],
   template: `
     <app-topbar (settingsRequested)="openArchived()" />
-    <main class="landing">
+    <main class="landing" id="inicio-reqlab">
       <section class="hero">
         <div>
           <div class="eyebrow">De la evidencia a la especificación</div>
           <h1>Tus fuentes.<br />Tus próximos <span>requisitos.</span></h1>
           <p>
-            Un espacio para entender el contexto, construir requisitos y seguir el hilo de cada
+            Un espacio para entender el contexto, construir requisitos funcionales, requisitos no funcionales e historias de usuario mientas siges el hilo de cada
             decisión.
           </p>
           <div class="gap">
@@ -107,10 +107,76 @@ import { TopbarComponent } from '../../shared/topbar.component';
       @if (!store.loading() && filteredProjects().length === 0) {
         <p class="empty-filter">No hay proyectos que coincidan con este filtro.</p>
       }
-      <div class="landing-note">
-        <span><app-icon name="shield" /> Tu revisión mantiene el control de cada propuesta.</span
-        ><span>Persistencia de fuentes por proyecto</span>
+
+      <div class="learn-more-prompt">
+        <a class="learn-more-link" href="#conoce-reqlab" aria-label="Conoce más sobre ReqLab" (click)="scrollToSection($event, 'conoce-reqlab')">
+          <span class="learn-more-label">Conoce más sobre ReqLab</span>
+          <span class="learn-more-arrow"><app-icon name="chevron-down" /></span>
+        </a>
       </div>
+
+      <section class="about-reqlab" id="conoce-reqlab" aria-labelledby="about-reqlab-title">
+        <header class="about-reqlab-head">
+          <div>
+            <span class="eyebrow">Cómo funciona</span>
+            <h2 id="about-reqlab-title">Del documento desordenado a una propuesta trazable</h2>
+          </div>
+          <p>
+            ReqLab organiza el contexto antes de generar. Cada resultado conserva el camino hacia
+            la evidencia y permanece bajo tu decisión.
+          </p>
+        </header>
+
+        <div class="about-flow" role="list" aria-label="Flujo principal de ReqLab">
+          <article class="about-flow-card sources" role="listitem">
+            <span class="about-step-number">01</span>
+            <span class="about-step-icon"><app-icon name="file" /></span>
+            <h3>Reúne las fuentes</h3>
+            <p>Sube documentos o pega correos, entrevistas, conversaciones y notas sin prepararlos.</p>
+            <small>PDF · DOCX · TXT · MD</small>
+          </article>
+          <span class="about-connector" aria-hidden="true"><app-icon name="arrow" /></span>
+          <article class="about-flow-card definition" role="listitem">
+            <span class="about-step-number">02</span>
+            <span class="about-step-icon"><app-icon name="chat" /></span>
+            <h3>Confirma la definición</h3>
+            <p>ReqLab interpreta el proyecto y pregunta únicamente por vacíos, dudas o contradicciones.</p>
+            <small>El contexto se confirma contigo</small>
+          </article>
+          <span class="about-connector" aria-hidden="true"><app-icon name="arrow" /></span>
+          <article class="about-flow-card generation" role="listitem">
+            <span class="about-step-number">03</span>
+            <span class="about-step-icon"><app-icon name="spark" /></span>
+            <h3>Genera con evidencia</h3>
+            <p>Los agentes especializados recuperan contexto y construyen propuestas relacionadas.</p>
+            <div class="about-artifact-types"><span>RF</span><span>RNF</span><span>HU</span></div>
+          </article>
+          <span class="about-connector" aria-hidden="true"><app-icon name="arrow" /></span>
+          <article class="about-flow-card review" role="listitem">
+            <span class="about-step-number">04</span>
+            <span class="about-step-icon"><app-icon name="check" /></span>
+            <h3>Revisa y comparte</h3>
+            <p>Comprueba fuentes, corrige, aprueba y exporta el resultado conservando su trazabilidad.</p>
+            <small>Tú mantienes el criterio final</small>
+          </article>
+        </div>
+
+        <div class="about-principle">
+          <app-icon name="link" />
+          <span><strong>Una misma idea atraviesa todo el flujo:</strong> cada propuesta debe poder volver a su fuente.</span>
+        </div>
+      </section>
+
+      <footer class="reqlab-footer">
+        <a class="logo" href="#inicio-reqlab" aria-label="Volver al inicio de ReqLab" (click)="scrollToSection($event, 'inicio-reqlab')">
+          <span class="logo-symbol"><app-icon name="layers" /></span>ReqLab
+        </a>
+        <p>Ingeniería de requisitos asistida, trazable y bajo revisión humana.</p>
+        <div class="reqlab-footer-meta">
+          <span>Prototipo académico</span>
+          <a href="#inicio-reqlab" (click)="scrollToSection($event, 'inicio-reqlab')">Volver arriba <app-icon name="arrow" /></a>
+        </div>
+      </footer>
     </main>
 
     @if (showForm()) {
@@ -208,7 +274,7 @@ import { TopbarComponent } from '../../shared/topbar.component';
     }
   `,
 })
-export class ProjectListComponent implements OnInit {
+export class ProjectListComponent implements OnInit, OnDestroy {
   readonly store = inject(WorkspaceStore);
   private readonly router = inject(Router);
   readonly showForm = signal(false);
@@ -221,6 +287,7 @@ export class ProjectListComponent implements OnInit {
     'Exportados',
   ];
   readonly phaseNames = ['Fuentes', 'Definición', 'Generación', 'Revisión', 'Exportación'];
+  private scrollAnimation?: number;
   query = '';
   draft = { name: '', domain: '', description: '' };
   filteredProjects(): Project[] {
@@ -236,6 +303,49 @@ export class ProjectListComponent implements OnInit {
   }
   ngOnInit(): void {
     void this.store.loadProjects();
+  }
+  scrollToSection(event: Event, sectionId: 'inicio-reqlab' | 'conoce-reqlab'): void {
+    event.preventDefault();
+    const target = document.getElementById(sectionId);
+    if (!target) return;
+
+    if (this.scrollAnimation !== undefined) cancelAnimationFrame(this.scrollAnimation);
+    const start = window.scrollY;
+    const offset = sectionId === 'conoce-reqlab' ? 22 : 0;
+    const maximum = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    const destination = Math.min(
+      maximum,
+      Math.max(0, start + target.getBoundingClientRect().top - offset),
+    );
+    const distance = destination - start;
+    const updateLocation = (): void => {
+      const location = `${window.location.pathname}${window.location.search}`;
+      history.replaceState(null, '', sectionId === 'conoce-reqlab' ? `${location}#${sectionId}` : location);
+    };
+
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || Math.abs(distance) < 2) {
+      window.scrollTo(0, destination);
+      updateLocation();
+      return;
+    }
+
+    const duration = Math.min(1050, Math.max(650, Math.abs(distance) * 0.45));
+    const startedAt = performance.now();
+    const animate = (now: number): void => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = 0.5 - Math.cos(Math.PI * progress) / 2;
+      window.scrollTo(0, start + distance * eased);
+      if (progress < 1) {
+        this.scrollAnimation = requestAnimationFrame(animate);
+      } else {
+        this.scrollAnimation = undefined;
+        updateLocation();
+      }
+    };
+    this.scrollAnimation = requestAnimationFrame(animate);
+  }
+  ngOnDestroy(): void {
+    if (this.scrollAnimation !== undefined) cancelAnimationFrame(this.scrollAnimation);
   }
   open(id: string): void {
     void this.router.navigate(['/projects', id, 'sources']);
