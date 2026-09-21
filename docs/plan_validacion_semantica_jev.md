@@ -4,6 +4,8 @@ Fecha: 21 de septiembre de 2026.
 
 Estado: plan preparado; implementación y experimentos pendientes. No contiene resultados de Jev.
 
+Adenda de decisión: se descartó la revisión humana por restricción de tiempo. La evaluación de viabilidad resultante está en `docs/informe_viabilidad_jev_sin_revision_humana.md`; el módulo se considera una extensión técnica exploratoria, no una condición del experimento principal.
+
 Rama: `feature/jev-semantic-validation`.
 
 Base: `feature/rag-and-agent-improvements`, commit `1cd865db0497f798d36d89aa873e7c47d2391c0a`.
