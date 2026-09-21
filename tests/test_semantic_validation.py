@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,7 @@ from reqlab.services import ProjectApplicationService
 from reqlab.settings import Settings
 from reqlab.storage import SQLiteRepository
 from reqlab.typesafe_client import TypeSafeDecisionClient, _RetryableTypeSafeError
+import reqlab.typesafe_client as typesafe_client_module
 
 
 class _FakeDecisionClient:
@@ -271,6 +273,32 @@ class SemanticValidationTests(unittest.TestCase):
         self.assertEqual(client.model, response["model"])
         self.assertEqual(2, client.calls)
         self.assertEqual(2, client.get_last_telemetry()["attempts"])
+
+    def test_typesafe_client_uses_openrouter_decisions_endpoint(self):
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"model":"typesafe/jev-1.13","answers":{}}'
+
+        client = TypeSafeDecisionClient(
+            api_key="secret",
+            base_url="https://openrouter.ai/api",
+            model="typesafe/jev-1.13",
+            endpoint_path="/alpha/decisions",
+            max_attempts=1,
+        )
+        with patch.object(typesafe_client_module, "urlopen", return_value=_Response()) as mocked:
+            response = client.system_one("state", {"q": {"type": "choice"}})
+
+        request = mocked.call_args.args[0]
+        self.assertEqual("https://openrouter.ai/api/alpha/decisions", request.full_url)
+        self.assertEqual("Bearer secret", request.get_header("Authorization"))
+        self.assertEqual("typesafe/jev-1.13", response["model"])
 
 
 if __name__ == "__main__":

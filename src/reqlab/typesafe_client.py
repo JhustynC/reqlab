@@ -35,10 +35,11 @@ class _RetryableTypeSafeError(RuntimeError):
 
 
 class TypeSafeDecisionClient:
-    """Cliente mínimo para el endpoint System One de TypeSafe.
+    """Cliente mínimo para el endpoint de decisiones de Jev.
 
     Es independiente del cliente generativo de ReqLab porque el contrato de Jev
-    recibe ``state`` y preguntas tipadas, no mensajes de Chat Completions.
+    recibe ``state`` y preguntas tipadas, no mensajes de Chat Completions. La
+    ruta se puede dirigir a OpenRouter o a la API directa de TypeSafe.
     """
 
     def __init__(
@@ -46,6 +47,7 @@ class TypeSafeDecisionClient:
         api_key: str | None,
         base_url: str = "https://api.typesafe.ai",
         model: str = "jev-1.13.0",
+        endpoint_path: str = "/v1/systemone",
         timeout_seconds: int = 15,
         max_attempts: int = 2,
     ):
@@ -56,6 +58,9 @@ class TypeSafeDecisionClient:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
+        if not endpoint_path.startswith("/"):
+            raise ValueError("endpoint_path debe comenzar con '/'.")
+        self.endpoint_path = endpoint_path
         self.timeout_seconds = timeout_seconds
         self.max_attempts = max_attempts
         self._telemetry: ContextVar[dict[str, Any]] = ContextVar(
@@ -142,12 +147,14 @@ class TypeSafeDecisionClient:
 
     def _request_once(self, payload: dict[str, Any], timeout: int) -> dict[str, Any]:
         request = Request(
-            f"{self.base_url}/v1/systemone",
+            f"{self.base_url}{self.endpoint_path}",
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
+                "HTTP-Referer": "http://localhost:8000",
+                "X-OpenRouter-Title": "ReqLab thesis pilot",
             },
             method="POST",
         )

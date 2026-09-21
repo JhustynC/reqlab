@@ -58,6 +58,7 @@ class Settings:
     typesafe_api_key: str | None = None
     typesafe_base_url: str = "https://api.typesafe.ai"
     typesafe_model: str = "jev-1.13.0"
+    typesafe_endpoint_path: str = "/v1/systemone"
     semantic_timeout_seconds: int = 15
     semantic_max_attempts: int = 2
     semantic_prompt_version: str = "jev-evidence-v1"
@@ -88,6 +89,8 @@ class Settings:
             raise ValueError("SEMANTIC_TIMEOUT_SECONDS debe ser mayor que cero.")
         if self.semantic_max_attempts < 1:
             raise ValueError("SEMANTIC_MAX_ATTEMPTS debe ser al menos 1.")
+        if not self.typesafe_endpoint_path.startswith("/"):
+            raise ValueError("TYPESAFE_ENDPOINT_PATH debe comenzar con '/'.")
         if (
             self.semantic_confidence_threshold is not None
             and not 0 <= self.semantic_confidence_threshold <= 1
@@ -121,6 +124,7 @@ class Settings:
                 "provider": "typesafe",
                 "model": self.typesafe_model,
                 "base_url": self.typesafe_base_url,
+                "endpoint_path": self.typesafe_endpoint_path,
                 "timeout_seconds": self.semantic_timeout_seconds,
                 "max_attempts": self.semantic_max_attempts,
                 "prompt_version": self.semantic_prompt_version,
@@ -180,8 +184,12 @@ class Settings:
             semantic_validation_enabled=_env_bool("SEMANTIC_VALIDATION_ENABLED", False),
             semantic_validation_mode=_env("SEMANTIC_VALIDATION_MODE", "shadow").lower(),
             typesafe_api_key=_env("TYPESAFE_API_KEY") or None,
-            typesafe_base_url=_env("TYPESAFE_BASE_URL", "https://api.typesafe.ai").rstrip("/"),
-            typesafe_model=_env("TYPESAFE_MODEL", "jev-1.13.0"),
+            # El acceso disponible para este piloto usa la ruta de OpenRouter.
+            # Para la API directa de TypeSafe se pueden sobreescribir los tres
+            # valores con api.typesafe.ai, jev-1.13.0 y /v1/systemone.
+            typesafe_base_url=_env("TYPESAFE_BASE_URL", "https://openrouter.ai/api").rstrip("/"),
+            typesafe_model=_env("TYPESAFE_MODEL", "typesafe/jev-1.13"),
+            typesafe_endpoint_path=_env("TYPESAFE_ENDPOINT_PATH", "/alpha/decisions"),
             semantic_timeout_seconds=_env_int("SEMANTIC_TIMEOUT_SECONDS", 15),
             semantic_max_attempts=_env_int("SEMANTIC_MAX_ATTEMPTS", 2),
             semantic_prompt_version=_env("SEMANTIC_PROMPT_VERSION", "jev-evidence-v1"),

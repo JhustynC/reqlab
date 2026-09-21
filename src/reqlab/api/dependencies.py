@@ -56,6 +56,7 @@ def get_semantic_client() -> TypeSafeDecisionClient:
         api_key=settings.typesafe_api_key,
         base_url=settings.typesafe_base_url,
         model=settings.typesafe_model,
+        endpoint_path=settings.typesafe_endpoint_path,
         timeout_seconds=settings.semantic_timeout_seconds,
         max_attempts=settings.semantic_max_attempts,
     )

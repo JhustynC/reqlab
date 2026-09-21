@@ -58,7 +58,9 @@ Para habilitar una prueba remota, configure en `.env`:
 SEMANTIC_VALIDATION_ENABLED=True
 SEMANTIC_VALIDATION_MODE=shadow
 TYPESAFE_API_KEY=<clave>
-TYPESAFE_MODEL=jev-1.13.0
+TYPESAFE_BASE_URL=https://openrouter.ai/api
+TYPESAFE_ENDPOINT_PATH=/alpha/decisions
+TYPESAFE_MODEL=typesafe/jev-1.13
 ```
 
 Después de generar artefactos:

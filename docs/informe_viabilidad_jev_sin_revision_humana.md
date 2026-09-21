@@ -10,11 +10,11 @@ Jev es técnicamente viable como componente opcional y exploratorio de validaci�
 
 La recomendación para la tesis es mantenerlo fuera del tratamiento principal M0/T1 y, si se conserva, presentarlo como una integración experimental no concluyente. Si el plazo obliga a escoger, la integración puede dejarse implementada y desactivada sin ejecutar el piloto remoto.
 
-## Qué se pudo comprobar sin una clave de TypeSafe
+## Qué se pudo comprobar sin una respuesta remota de Jev
 
 El código de ReqLab ya cubre el contrato técnico del piloto:
 
-- El cliente usa el endpoint independiente `POST /v1/systemone`; no intenta tratar Jev como Chat Completions.
+- El cliente usa un endpoint de decisiones configurable; con la clave disponible apunta a `POST /api/alpha/decisions` de OpenRouter y no intenta tratar Jev como Chat Completions.
 - La respuesta se valida antes de aceptarse: preguntas completas, opciones exactas, probabilidades válidas y confianza dentro del intervalo esperado.
 - Se evalúan por separado el respaldo conjunto del artefacto y la relación de cada fragmento citado.
 - Las citas inexistentes se descartan sin llamada remota.
@@ -23,11 +23,11 @@ El código de ReqLab ya cubre el contrato técnico del piloto:
 - Las huellas de entradas permiten marcar como `stale` un resultado después de una edición.
 - Las respuestas exitosas conservan el estado y las preguntas enviadas, la versión del modelo, las probabilidades, la confianza y la telemetría.
 
-Las ocho pruebas del módulo pasan con un cliente simulado. Estas pruebas verifican la integración, no la inteligencia de Jev.
+Las ocho pruebas específicas del módulo y la suite completa (41 pruebas) pasan con clientes simulados. Estas pruebas verifican la integración, no la inteligencia de Jev.
 
 ## Evidencia que no existe todavía
 
-No hay una `TYPESAFE_API_KEY` configurada en el entorno ni en `.env`, por lo que no se ha efectuado una llamada real. No hay resultados de Jev sobre el corpus Altavista, ni mediciones reales de español, latencia, costo, tasa de errores o estabilidad entre repeticiones.
+La clave disponible es de OpenRouter. Antes de esta corrección, ReqLab todavía apuntaba por defecto a la API directa de TypeSafe, por lo que no era válido usar esa clave con la configuración anterior. La ruta se corrigió para OpenRouter (`/api/alpha/decisions`, modelo `typesafe/jev-1.13`). La prueba mínima confirmó que la configuración carga la clave sin exponerla, pero el entorno de ejecución bloqueó la conexión saliente con `WinError 10013`; por tanto, todavía no hay respuesta real de Jev ni resultados sobre el corpus Altavista, español, latencia, costo, tasa de errores o estabilidad entre repeticiones.
 
 Tampoco existe una referencia externa para decidir si una clasificación semántica es correcta. Sustituir a dos expertos por otra respuesta generada por un modelo, incluido este asistente, produciría una comparación circular: serviría como prueba de funcionamiento, pero no como validación independiente.
 
@@ -68,7 +68,7 @@ Con el plazo actual, la opción metodológicamente más segura es:
 2. no incorporarlo a los resultados comparativos principales;
 3. describirlo como extensión exploratoria o trabajo futuro;
 4. no reportar exactitud, mejora, reducción de errores ni superioridad;
-5. si se obtiene una clave, hacer únicamente una prueba técnica pequeña y reportar sus salidas como observaciones no validadas.
+5. si se habilita la salida de red, hacer únicamente una prueba técnica pequeña y reportar sus salidas como observaciones no validadas.
 
 Una prueba con casos obvios y etiquetas escritas por nosotros puede servir para detectar fallos groseros de integración, pero no cambia este veredicto: sería un smoke test, no una evaluación científica de Jev.
 
