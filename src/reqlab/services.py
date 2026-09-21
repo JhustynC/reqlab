@@ -15,8 +15,10 @@ from .generation_budget import (
 )
 from .llm import DeepSeekClient
 from .models import Artifact
+from .semantic_validation import SemanticValidationService
 from .settings import Settings
 from .storage import SQLiteRepository
+from .typesafe_client import DecisionClient
 from .validation import TraceabilityConsistencyAgent
 from .vector_store import ChromaProjectVectorStore, CrossEncoderReranker, HybridRetrievalAgent
 
@@ -32,6 +34,7 @@ class ProjectApplicationService:
         client: DeepSeekClient,
         settings: Settings | None = None,
         reranker: CrossEncoderReranker | None = None,
+        semantic_client: DecisionClient | None = None,
     ):
         self.repository = repository
         self.vector_store = vector_store
@@ -40,6 +43,7 @@ class ProjectApplicationService:
         self.client = client
         self.settings = settings
         self.reranker = reranker
+        self.semantic_client = semantic_client
         chunk_size = settings.chunk_size if settings else 1200
         chunk_overlap = settings.chunk_overlap if settings else 180
         self.extractor = DocumentExtractionService()
@@ -459,6 +463,89 @@ class ProjectApplicationService:
             ),
         ).validate(artifacts, self.repository.list_fragments(project_id))
         self.repository.save_validation_report(project_id, report)
+
+    def run_semantic_validation(
+        self, project_id: str, run_id: str | None = None
+    ) -> dict[str, Any]:
+        """Ejecuta el piloto en modo shadow sin mutar artefactos ni aprobaciones."""
+        self.repository.get_project(project_id)
+        artifacts = self.repository.list_artifacts(project_id)
+        if not artifacts:
+            raise ValueError("El proyecto todavía no tiene artefactos para validar.")
+        validator = self._semantic_validator(require_enabled=True)
+        active_run = run_id or self.repository.start_run(
+            project_id,
+            "semantic_validation",
+            "semantic.validator",
+            {
+                "mode": validator.mode,
+                "model": validator.client.model,
+                "prompt_version": validator.prompt_version,
+                "confidence_threshold": validator.confidence_threshold,
+            },
+        )
+        try:
+            self.repository.update_run_progress(
+                active_run, 10, "Preparando artefactos y evidencia", "preparing"
+            )
+            fragments = self.repository.list_fragments(project_id)
+            report = validator.evaluate_project(project_id, artifacts, fragments)
+            report_id = self.repository.save_semantic_validation_report(
+                project_id,
+                report["input_snapshot_hash"],
+                report,
+                active_run,
+            )
+            self.repository.update_run_progress(
+                active_run, 100, "Validación semántica disponible", "completed"
+            )
+            run_status = "failed" if report["technical_status"] == "failed" else "completed"
+            self.repository.finish_run(active_run, run_status, metrics=report["summary"])
+            return {"id": report_id, "run_id": active_run, "stale": False, "report": report}
+        except Exception as error:
+            self.repository.finish_run(active_run, "failed", str(error))
+            raise
+
+    def semantic_validation_status(self, project_id: str) -> dict[str, Any]:
+        self.repository.get_project(project_id)
+        enabled = bool(self.settings and self.settings.semantic_validation_enabled)
+        configured = bool(self.semantic_client and self.semantic_client.configured)
+        latest = self.repository.latest_semantic_validation_report(project_id)
+        stale = None
+        if latest:
+            validator = self._semantic_validator(require_enabled=False)
+            current_hash = validator.snapshot_hash(
+                self.repository.list_artifacts(project_id),
+                self.repository.list_fragments(project_id),
+            )
+            stale = latest["input_snapshot_hash"] != current_hash
+            latest = latest | {"stale": stale}
+        return {
+            "enabled": enabled,
+            "configured": configured,
+            "mode": self.settings.semantic_validation_mode if self.settings else "shadow",
+            "latest": latest,
+            "latest_run": self.repository.latest_run(project_id, "semantic.validator"),
+        }
+
+    def _semantic_validator(self, *, require_enabled: bool) -> SemanticValidationService:
+        if not self.settings or not self.semantic_client:
+            raise ValueError("El componente de validación semántica no está configurado.")
+        if require_enabled and not self.settings.semantic_validation_enabled:
+            raise ValueError(
+                "La validación semántica está desactivada. Configure SEMANTIC_VALIDATION_ENABLED=True."
+            )
+        if require_enabled and not self.semantic_client.configured:
+            raise ValueError(
+                "La validación semántica está activada, pero TYPESAFE_API_KEY no está configurada."
+            )
+        return SemanticValidationService(
+            self.semantic_client,
+            enabled=self.settings.semantic_validation_enabled,
+            mode=self.settings.semantic_validation_mode,
+            prompt_version=self.settings.semantic_prompt_version,
+            confidence_threshold=self.settings.semantic_confidence_threshold,
+        )
 
     def _retriever(self, project_id: str, fragments: list) -> HybridRetrievalAgent:
         return HybridRetrievalAgent(

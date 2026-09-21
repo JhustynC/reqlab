@@ -3,8 +3,8 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .dependencies import get_client, get_settings
-from .routers import artifacts, definition, exports, generation, projects, sources
+from .dependencies import get_client, get_semantic_client, get_settings
+from .routers import artifacts, definition, exports, generation, projects, semantic_validation, sources
 
 
 def create_app() -> FastAPI:
@@ -26,6 +26,7 @@ def create_app() -> FastAPI:
     application.include_router(definition.router, prefix="/api")
     application.include_router(generation.router, prefix="/api")
     application.include_router(artifacts.router, prefix="/api")
+    application.include_router(semantic_validation.router, prefix="/api")
     application.include_router(exports.router, prefix="/api")
 
     @application.get("/api/health", tags=["system"])
@@ -33,6 +34,8 @@ def create_app() -> FastAPI:
         return {
             "status": "ok",
             "llm_configured": get_client().configured,
+            "semantic_validation_enabled": settings.semantic_validation_enabled,
+            "typesafe_configured": get_semantic_client().configured,
             "storage": "sqlite+chromadb",
         }
 

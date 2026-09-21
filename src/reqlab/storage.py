@@ -162,6 +162,15 @@ class SQLiteRepository:
                     created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS semantic_validation_reports (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+                    input_snapshot_hash TEXT NOT NULL,
+                    report_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS revision_proposals (
                     id TEXT PRIMARY KEY,
                     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -185,6 +194,8 @@ class SQLiteRepository:
                     ON artifacts(project_id, artifact_type);
                 CREATE INDEX IF NOT EXISTS idx_validation_project_created
                     ON validation_reports(project_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_semantic_validation_project_created
+                    ON semantic_validation_reports(project_id, created_at);
                 CREATE INDEX IF NOT EXISTS idx_revision_artifact_status
                     ON revision_proposals(artifact_id, status);
                 """
@@ -1044,6 +1055,44 @@ class SQLiteRepository:
         if not row:
             return None
         return {"report": json.loads(row["report_json"]), "created_at": row["created_at"]}
+
+    def save_semantic_validation_report(
+        self,
+        project_id: str,
+        input_snapshot_hash: str,
+        report: dict[str, Any],
+        run_id: str | None = None,
+    ) -> str:
+        report_id = str(uuid.uuid4())
+        with self.connection() as connection:
+            connection.execute(
+                """INSERT INTO semantic_validation_reports
+                   (id, project_id, run_id, input_snapshot_hash, report_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    report_id,
+                    project_id,
+                    run_id,
+                    input_snapshot_hash,
+                    json.dumps(report, ensure_ascii=False),
+                    utc_now(),
+                ),
+            )
+        return report_id
+
+    def latest_semantic_validation_report(self, project_id: str) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT id, run_id, input_snapshot_hash, report_json, created_at
+                   FROM semantic_validation_reports
+                   WHERE project_id = ? ORDER BY created_at DESC LIMIT 1""",
+                (project_id,),
+            ).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["report"] = json.loads(item.pop("report_json"))
+        return item
 
     def create_revision_proposal(
         self, project_id: str, artifact_id: str, proposal: Artifact, instruction: str

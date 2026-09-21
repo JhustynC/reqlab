@@ -7,6 +7,7 @@ from ..llm import OpenAICompatibleClient
 from ..services import ProjectApplicationService
 from ..settings import Settings
 from ..storage import SQLiteRepository
+from ..typesafe_client import TypeSafeDecisionClient
 from ..vector_store import ChromaProjectVectorStore, CrossEncoderReranker
 
 
@@ -49,6 +50,18 @@ def get_client() -> OpenAICompatibleClient:
 
 
 @lru_cache(maxsize=1)
+def get_semantic_client() -> TypeSafeDecisionClient:
+    settings = get_settings()
+    return TypeSafeDecisionClient(
+        api_key=settings.typesafe_api_key,
+        base_url=settings.typesafe_base_url,
+        model=settings.typesafe_model,
+        timeout_seconds=settings.semantic_timeout_seconds,
+        max_attempts=settings.semantic_max_attempts,
+    )
+
+
+@lru_cache(maxsize=1)
 def get_service() -> ProjectApplicationService:
     return ProjectApplicationService(
         get_repository(),
@@ -57,4 +70,5 @@ def get_service() -> ProjectApplicationService:
         get_client(),
         settings=get_settings(),
         reranker=get_reranker(),
+        semantic_client=get_semantic_client(),
     )

@@ -21,6 +21,8 @@ Generar RF, RNF y HU mediante agentes especializados
       ↓
 Validar trazabilidad, formato y posibles duplicados
       ↓
+Ejecutar opcionalmente validación semántica de evidencia con Jev
+      ↓
 Revisar manualmente o solicitar una propuesta de edición
       ↓
 Exportar DOCX o JSON
@@ -43,6 +45,31 @@ La recuperación es híbrida: combina TF-IDF y similitud vectorial mediante Reci
 Cada ejecución conserva una instantánea de su configuración técnica. Los resultados incluyen relaciones explícitas RF–RNF–HU, validación por artefacto y vínculos separados hacia la evidencia documental. Angular presenta esta información en las vistas de revisión, trazabilidad, observaciones y ejecución.
 
 Las observaciones son alertas, no decisiones automáticas. Cada una permite abrir el artefacto afectado para editarlo, reclasificarlo, cambiar su estado o solicitar una propuesta asistida. Una reclasificación crea una nueva versión, asigna una clave acorde con el nuevo tipo y actualiza las relaciones internas que utilizaban la clave anterior.
+
+## Piloto opcional de validación semántica con Jev
+
+ReqLab puede evaluar, de manera separada, si los fragmentos citados respaldan semánticamente cada artefacto. Jev clasifica el respaldo conjunto como `completo`, `parcial`, `ausente`, `contradictorio` o `indeterminado`, y cada enlace como `aporta_respaldo`, `solo_contexto`, `irrelevante`, `contradice` o `indeterminado`.
+
+El componente funciona exclusivamente en modo `shadow`: no edita, aprueba, rechaza ni reclasifica artefactos y no sustituye la validación determinista ni el juicio experto. Se mantiene desactivado por defecto. Una edición del artefacto, sus citas o la evidencia hace que el último informe aparezca como obsoleto.
+
+Para habilitar una prueba remota, configure en `.env`:
+
+```text
+SEMANTIC_VALIDATION_ENABLED=True
+SEMANTIC_VALIDATION_MODE=shadow
+TYPESAFE_API_KEY=<clave>
+TYPESAFE_MODEL=jev-1.13.0
+```
+
+Después de generar artefactos:
+
+```text
+POST /api/projects/{project_id}/semantic-validation
+GET  /api/projects/{project_id}/semantic-validation
+GET  /api/runs/{run_id}
+```
+
+El `POST` ejecuta la evaluación en segundo plano. El `GET` devuelve la configuración, la última ejecución y el informe separado, incluido el indicador `stale`. Las pruebas automatizadas usan clientes simulados y nunca realizan llamadas ni generan cargos. Las preguntas, entradas, versión efectiva del modelo, probabilidades, latencia, consumo e intentos se conservan para reproducir el piloto; las credenciales no se almacenan.
 
 Antes de generar, la API calcula para RF, RNF y HU un intervalo operativo a partir del volumen de evidencia y de indicios lingüísticos generales presentes en los fragmentos. Angular muestra el mínimo, el valor sugerido y el máximo mediante controles deslizantes independientes. El valor seleccionado es un **tope de salida**, no una cuota ni una estimación del número real de requisitos: los agentes deben devolver menos elementos cuando la evidencia no sustente más. La recomendación, el método utilizado y la selección del usuario quedan registrados en la ejecución.
 
@@ -118,6 +145,8 @@ python -m unittest discover -s tests -v
 - `generation_budget.py`: cálculo versionado del presupuesto adaptativo de generación.
 - `services.py`: casos de uso y orquestación del flujo.
 - `validation.py`: controles deterministas de trazabilidad y consistencia.
+- `semantic_validation.py`: evaluación opcional del respaldo documental y política de abstención.
+- `typesafe_client.py`: cliente independiente para el endpoint System One de TypeSafe.
 - `exporters.py`: exportación a Word.
 
 ## Límites actuales del MVP

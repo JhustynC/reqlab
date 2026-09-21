@@ -26,6 +26,11 @@ def _env_bool(name: str, fallback: bool) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+def _env_optional_float(name: str) -> float | None:
+    raw = _env(name)
+    return float(raw) if raw else None
+
+
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
@@ -48,6 +53,15 @@ class Settings:
     duplicate_threshold: float
     cross_type_duplicate_threshold: float
     prompt_version: str
+    semantic_validation_enabled: bool = False
+    semantic_validation_mode: str = "shadow"
+    typesafe_api_key: str | None = None
+    typesafe_base_url: str = "https://api.typesafe.ai"
+    typesafe_model: str = "jev-1.13.0"
+    semantic_timeout_seconds: int = 15
+    semantic_max_attempts: int = 2
+    semantic_prompt_version: str = "jev-evidence-v1"
+    semantic_confidence_threshold: float | None = None
 
     def __post_init__(self) -> None:
         if self.max_upload_bytes < 1:
@@ -68,6 +82,17 @@ class Settings:
             raise ValueError("DUPLICATE_THRESHOLD debe estar en el intervalo (0, 1].")
         if not 0 < self.cross_type_duplicate_threshold <= 1:
             raise ValueError("CROSS_TYPE_DUPLICATE_THRESHOLD debe estar en el intervalo (0, 1].")
+        if self.semantic_validation_mode != "shadow":
+            raise ValueError("SEMANTIC_VALIDATION_MODE solo admite 'shadow' durante el piloto.")
+        if self.semantic_timeout_seconds < 1:
+            raise ValueError("SEMANTIC_TIMEOUT_SECONDS debe ser mayor que cero.")
+        if self.semantic_max_attempts < 1:
+            raise ValueError("SEMANTIC_MAX_ATTEMPTS debe ser al menos 1.")
+        if (
+            self.semantic_confidence_threshold is not None
+            and not 0 <= self.semantic_confidence_threshold <= 1
+        ):
+            raise ValueError("SEMANTIC_CONFIDENCE_THRESHOLD debe estar entre 0 y 1.")
 
     def experimental_snapshot(self) -> dict[str, object]:
         """Configuración suficiente para interpretar y reproducir una ejecución."""
@@ -89,6 +114,17 @@ class Settings:
             "validation": {
                 "duplicate_threshold": self.duplicate_threshold,
                 "cross_type_duplicate_threshold": self.cross_type_duplicate_threshold,
+            },
+            "semantic_validation": {
+                "enabled": self.semantic_validation_enabled,
+                "mode": self.semantic_validation_mode,
+                "provider": "typesafe",
+                "model": self.typesafe_model,
+                "base_url": self.typesafe_base_url,
+                "timeout_seconds": self.semantic_timeout_seconds,
+                "max_attempts": self.semantic_max_attempts,
+                "prompt_version": self.semantic_prompt_version,
+                "confidence_threshold": self.semantic_confidence_threshold,
             },
             "prompt_version": self.prompt_version,
         }
@@ -141,4 +177,15 @@ class Settings:
             duplicate_threshold=_env_float("DUPLICATE_THRESHOLD", 0.72),
             cross_type_duplicate_threshold=_env_float("CROSS_TYPE_DUPLICATE_THRESHOLD", 0.55),
             prompt_version=_env("PROMPT_VERSION", "reqlab-v2"),
+            semantic_validation_enabled=_env_bool("SEMANTIC_VALIDATION_ENABLED", False),
+            semantic_validation_mode=_env("SEMANTIC_VALIDATION_MODE", "shadow").lower(),
+            typesafe_api_key=_env("TYPESAFE_API_KEY") or None,
+            typesafe_base_url=_env("TYPESAFE_BASE_URL", "https://api.typesafe.ai").rstrip("/"),
+            typesafe_model=_env("TYPESAFE_MODEL", "jev-1.13.0"),
+            semantic_timeout_seconds=_env_int("SEMANTIC_TIMEOUT_SECONDS", 15),
+            semantic_max_attempts=_env_int("SEMANTIC_MAX_ATTEMPTS", 2),
+            semantic_prompt_version=_env("SEMANTIC_PROMPT_VERSION", "jev-evidence-v1"),
+            semantic_confidence_threshold=_env_optional_float(
+                "SEMANTIC_CONFIDENCE_THRESHOLD"
+            ),
         )
