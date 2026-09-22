@@ -35,6 +35,8 @@ class Settings:
     llm_base_url: str
     llm_model: str
     llm_max_retries: int
+    llm_thinking_enabled: bool
+    llm_max_tokens: int
     embedding_model: str
     embedding_query_prefix: str
     embedding_passage_prefix: str
@@ -54,6 +56,8 @@ class Settings:
             raise ValueError("MAX_UPLOAD_BYTES debe ser mayor que cero.")
         if self.llm_max_retries < 1:
             raise ValueError("LLM_MAX_RETRIES debe ser al menos 1.")
+        if self.llm_max_tokens < 1:
+            raise ValueError("LLM_MAX_TOKENS debe ser al menos 1.")
         if self.retrieval_top_k < 1:
             raise ValueError("RETRIEVAL_TOP_K debe ser mayor que cero.")
         if self.chunk_size < 300:
@@ -72,7 +76,12 @@ class Settings:
     def experimental_snapshot(self) -> dict[str, object]:
         """Configuración suficiente para interpretar y reproducir una ejecución."""
         return {
-            "llm": {"model": self.llm_model, "base_url": self.llm_base_url},
+            "llm": {
+                "model": self.llm_model,
+                "base_url": self.llm_base_url,
+                "thinking_mode": "enabled" if self.llm_thinking_enabled else "disabled",
+                "max_tokens": self.llm_max_tokens,
+            },
             "embedding": {
                 "model": self.embedding_model,
                 "query_prefix": self.embedding_query_prefix,
@@ -107,7 +116,7 @@ class Settings:
             or _env("DEEPSEEK_BASE_URL")
             or "https://api.deepseek.com"
         ).rstrip("/")
-        llm_model = _env("LLM_MODEL") or _env("DEEPSEEK_MODEL") or "deepseek-chat"
+        llm_model = _env("LLM_MODEL") or _env("DEEPSEEK_MODEL") or "deepseek-flash"
         embedding_model = _env(
             "EMBEDDING_MODEL",
             "intfloat/multilingual-e5-base",
@@ -125,6 +134,8 @@ class Settings:
             llm_base_url=llm_base_url,
             llm_model=llm_model,
             llm_max_retries=_env_int("LLM_MAX_RETRIES", 3),
+            llm_thinking_enabled=_env_bool("LLM_THINKING_ENABLED", False),
+            llm_max_tokens=_env_int("LLM_MAX_TOKENS", 12000),
             embedding_model=embedding_model,
             embedding_query_prefix=query_prefix,
             embedding_passage_prefix=passage_prefix,

@@ -40,6 +40,8 @@ Si una definición se confirma nuevamente después de haber generado resultados,
 
 La recuperación es híbrida: combina TF-IDF y similitud vectorial mediante Reciprocal Rank Fusion, con reranking multilingüe opcional. Los embeddings se calculan localmente con `sentence-transformers`; DeepSeek es el proveedor LLM validado para interpretar el corpus, generar preguntas adaptativas y artefactos, y proponer revisiones.
 
+La configuración de referencia utiliza `deepseek-flash`, identificador oficial de DeepSeek-V4.1-Flash. ReqLab desactiva explícitamente el modo de razonamiento para mantener una generación JSON controlada y reproducible, conserva una temperatura de `0.1`, limita cada respuesta a `12000` tokens y registra el modelo servido, la huella del sistema, el motivo de finalización y el consumo desglosado cuando la API los proporciona. Estos valores pueden configurarse mediante `LLM_MODEL`, `LLM_THINKING_ENABLED` y `LLM_MAX_TOKENS`, pero deben congelarse antes del experimento formal.
+
 Cada ejecución conserva una instantánea de su configuración técnica. Los resultados incluyen relaciones explícitas RF–RNF–HU, validación por artefacto y vínculos separados hacia la evidencia documental. Angular presenta esta información en las vistas de revisión, trazabilidad, observaciones y ejecución.
 
 Las observaciones son alertas, no decisiones automáticas. Cada una permite abrir el artefacto afectado para editarlo, reclasificarlo, cambiar su estado o solicitar una propuesta asistida. Una reclasificación crea una nueva versión, asigna una clave acorde con el nuevo tipo y actualiza las relaciones internas que utilizaban la clave anterior.

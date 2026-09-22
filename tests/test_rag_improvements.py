@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pydantic import BaseModel, Field
 
@@ -59,6 +61,32 @@ class _AlwaysInvalidClient(OpenAICompatibleClient):
         return {"values": []}
 
 
+class _FakeHttpResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return json.dumps({
+            "model": "deepseek-flash",
+            "system_fingerprint": "fp_test",
+            "choices": [{
+                "message": {"content": '{"values":["ok"]}'},
+                "finish_reason": "stop",
+            }],
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 5,
+                "total_tokens": 25,
+                "prompt_cache_hit_tokens": 4,
+                "prompt_cache_miss_tokens": 16,
+                "completion_tokens_details": {"reasoning_tokens": 0},
+            },
+        }).encode("utf-8")
+
+
 class _Retriever:
     def __init__(self):
         self.top_k = 0
@@ -88,6 +116,28 @@ class _FailingValidatedClient:
 
 
 class RagImprovementTests(unittest.TestCase):
+    def test_deepseek_flash_request_disables_thinking_and_records_served_version(self):
+        client = OpenAICompatibleClient(
+            api_key="test",
+            base_url="https://api.deepseek.com",
+            model="deepseek-flash",
+            thinking_enabled=False,
+            max_tokens=12000,
+        )
+        with patch("reqlab.llm.urlopen", return_value=_FakeHttpResponse()) as mocked:
+            response = client.complete_json("Devuelve JSON", "Entrada")
+
+        request = mocked.call_args.args[0]
+        body = json.loads(request.data.decode("utf-8"))
+        telemetry = client.get_last_telemetry()
+        self.assertEqual({"values": ["ok"]}, response)
+        self.assertEqual("deepseek-flash", body["model"])
+        self.assertEqual({"type": "disabled"}, body["thinking"])
+        self.assertEqual(12000, body["max_tokens"])
+        self.assertEqual("deepseek-flash", telemetry["served_model"])
+        self.assertEqual("fp_test", telemetry["system_fingerprint"])
+        self.assertEqual("disabled", telemetry["thinking_mode"])
+
     def test_e5_query_uses_only_query_prefix(self):
         provider = SentenceTransformerEmbeddingProvider("test", "query: ", "passage: ")
         encoder = _FakeEncoder()

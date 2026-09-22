@@ -45,6 +45,8 @@ def get_client() -> OpenAICompatibleClient:
         base_url=settings.llm_base_url,
         model=settings.llm_model,
         max_retries=settings.llm_max_retries,
+        thinking_enabled=settings.llm_thinking_enabled,
+        max_tokens=settings.llm_max_tokens,
     )
 
 
