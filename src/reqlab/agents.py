@@ -387,6 +387,20 @@ class ProjectDefinitionAgent:
                 with lock:
                     for key in ("total_tokens", "prompt_tokens", "completion_tokens", "latency_ms", "attempts"):
                         aggregate[key] = (aggregate.get(key) or 0) + (call.get(key) or 0)
+                    for key in (
+                        "requested_model",
+                        "served_model",
+                        "system_fingerprint",
+                        "finish_reason",
+                        "thinking_mode",
+                        "max_tokens",
+                        "failed",
+                        "last_error",
+                        "content_characters",
+                        "json_error_position",
+                    ):
+                        if call.get(key) is not None:
+                            aggregate[key] = call[key]
                     aggregate["calls"] = (aggregate.get("calls") or 0) + 1
 
     def _batches(self, fragments: list[Fragment]) -> list[list[Fragment]]:
@@ -520,7 +534,9 @@ Construye un perfil provisional para cada una de estas dimensiones: {', '.join(s
 - Usa únicamente los resúmenes de evidencia.
 - No ocultes contradicciones ni selecciones una alternativa sin confirmación.
 - Usa confianza high cuando varias evidencias claras coinciden, medium cuando la evidencia es parcial, low cuando la interpretación es dudosa y missing cuando no hay información.
-- Sintetiza cada dimension de forma clara y completa, evitando repetir hallazgos equivalentes. Cada value debe ser menor de 12 000 caracteres.
+- Sintetiza, no copies literalmente los resúmenes. Cada value debe tener como máximo 2 000 caracteres.
+- Cada question debe tener como máximo 400 caracteres y cada rationale como máximo 600 caracteres.
+- Devuelve exactamente una entrada de profile por dimensión y mantén la respuesta completa por debajo de 30 000 caracteres.
 - Formula hasta {maximum_questions} preguntas solo para información missing o low, contradicciones y decisiones que cambien el comportamiento o la calidad del sistema.
 - No preguntes por un dato que ya esté claro. La persona podrá corregir manualmente el perfil provisional.
 

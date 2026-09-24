@@ -167,7 +167,20 @@ class OpenAICompatibleClient:
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError as error:
-            raise RuntimeError("El LLM devolvió una respuesta que no es JSON válido.") from error
+            telemetry = self.get_last_telemetry()
+            telemetry.update({
+                "content_characters": len(cleaned),
+                "json_error_position": error.pos,
+            })
+            self._set_telemetry(telemetry)
+            if choice.get("finish_reason") == "length":
+                raise RuntimeError(
+                    "El LLM alcanzó el límite de salida y devolvió un JSON incompleto."
+                ) from error
+            raise RuntimeError(
+                f"El LLM devolvió una respuesta que no es JSON válido "
+                f"(posición {error.pos}, finish_reason={choice.get('finish_reason') or 'no disponible'})."
+            ) from error
 
     def complete_json_validated(
         self,

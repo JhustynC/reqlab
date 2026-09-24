@@ -12,9 +12,10 @@ from pydantic import BaseModel, Field
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "src"))
 
-from reqlab.agents import CONTRACTS, SpecializedGenerationAgent
+from reqlab.agents import CONTRACTS, ProjectDefinitionAgent, SpecializedGenerationAgent
 from reqlab.documents import TextSegmentationService, infer_source_kind
 from reqlab.llm import OpenAICompatibleClient
+from reqlab.llm_schemas import DefinitionAnalysisResponse
 from reqlab.models import Fragment
 from reqlab.models import Artifact
 from reqlab.validation import TraceabilityConsistencyAgent
@@ -87,6 +88,18 @@ class _FakeHttpResponse:
         }).encode("utf-8")
 
 
+class _TruncatedHttpResponse(_FakeHttpResponse):
+    def read(self):
+        return json.dumps({
+            "model": "deepseek-flash",
+            "choices": [{
+                "message": {"content": '{"profile":[{"dimension":"scope"'},
+                "finish_reason": "length",
+            }],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 12000, "total_tokens": 12020},
+        }).encode("utf-8")
+
+
 class _Retriever:
     def __init__(self):
         self.top_k = 0
@@ -137,6 +150,33 @@ class RagImprovementTests(unittest.TestCase):
         self.assertEqual("deepseek-flash", telemetry["served_model"])
         self.assertEqual("fp_test", telemetry["system_fingerprint"])
         self.assertEqual("disabled", telemetry["thinking_mode"])
+
+    def test_truncated_json_reports_output_limit_instead_of_generic_parse_error(self):
+        client = OpenAICompatibleClient(api_key="test", max_tokens=12000)
+        with patch("reqlab.llm.urlopen", return_value=_TruncatedHttpResponse()):
+            with self.assertRaisesRegex(RuntimeError, "límite de salida"):
+                client.complete_json("Devuelve JSON", "Entrada")
+
+        telemetry = client.get_last_telemetry()
+        self.assertEqual("length", telemetry["finish_reason"])
+        self.assertGreater(telemetry["content_characters"], 0)
+
+    def test_definition_synthesis_contract_is_bounded(self):
+        prompt = ProjectDefinitionAgent(object())._synthesis_prompt(
+            "Proyecto", "dominio", [{"findings": [], "uncertainties": []}], 10
+        )
+        self.assertIn("máximo 2 000 caracteres", prompt)
+        self.assertIn("por debajo de 30 000 caracteres", prompt)
+        with self.assertRaises(ValueError):
+            DefinitionAnalysisResponse.model_validate({
+                "profile": [{
+                    "dimension": "scope",
+                    "value": "x" * 2001,
+                    "source_fragments": [],
+                    "confidence": "high",
+                }],
+                "questions": [],
+            })
 
     def test_e5_query_uses_only_query_prefix(self):
         provider = SentenceTransformerEmbeddingProvider("test", "query: ", "passage: ")

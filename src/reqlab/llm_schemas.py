@@ -79,15 +79,18 @@ class DefinitionBatchResponse(BaseModel):
 
 class DefinitionProfileRecord(BaseModel):
     dimension: str = Field(min_length=1)
-    value: str = ""
+    # El perfil es una sintesis navegable, no una copia de todos los hallazgos.
+    # Acotar cada dimension evita que la respuesta completa agote la ventana de
+    # salida y quede como JSON truncado.
+    value: str = Field(default="", max_length=2000)
     source_fragments: list[str] = Field(default_factory=list)
     confidence: Literal["high", "medium", "low", "missing"]
 
 
 class DefinitionQuestionRecord(BaseModel):
     dimension: str = Field(min_length=1)
-    question: str = Field(min_length=1)
-    rationale: str = ""
+    question: str = Field(min_length=1, max_length=400)
+    rationale: str = Field(default="", max_length=600)
     source_fragments: list[str] = Field(default_factory=list)
 
 
