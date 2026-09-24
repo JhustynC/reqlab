@@ -21,7 +21,9 @@ def get_settings() -> Settings:
 
 @lru_cache(maxsize=1)
 def get_repository() -> SQLiteRepository:
-    return SQLiteRepository(get_settings().data_dir / "requirements.db")
+    repository = SQLiteRepository(get_settings().data_dir / "requirements.db")
+    repository.recover_interrupted_runs()
+    return repository
 
 
 @lru_cache(maxsize=1)
@@ -46,6 +48,8 @@ def get_client() -> OpenAICompatibleClient:
         base_url=settings.llm_base_url,
         model=settings.llm_model,
         max_retries=settings.llm_max_retries,
+        thinking_enabled=settings.llm_thinking_enabled,
+        max_tokens=settings.llm_max_tokens,
     )
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -35,6 +36,19 @@ class _MeasuredClient:
 
     def get_last_telemetry(self):
         return {"total_tokens": 7, "prompt_tokens": 5, "completion_tokens": 2, "attempts": 1}
+
+
+class _ParallelMeasuredClient(_MeasuredClient):
+    def __init__(self):
+        super().__init__()
+        self.barrier = threading.Barrier(3)
+
+    def complete_json_validated(self, **kwargs):
+        schema = kwargs["schema"]
+        if schema.__name__ == "DefinitionBatchResponse":
+            self.barrier.wait(timeout=5)
+            return schema.model_validate({"findings": [], "uncertainties": []})
+        return schema.model_validate({"profile": []})
 
 
 class RerankingAndUsageTests(unittest.TestCase):
@@ -136,6 +150,16 @@ class RerankingAndUsageTests(unittest.TestCase):
         agent._complete_validated(_Payload, system_prompt="s", user_prompt="u")
         self.assertEqual(14, agent.get_last_telemetry()["total_tokens"])
         self.assertEqual(2, agent.get_last_telemetry()["calls"])
+
+    def test_definition_telemetry_includes_parallel_batches(self):
+        agent = ProjectDefinitionAgent(_ParallelMeasuredClient(), batch_character_limit=70, max_workers=3)
+        fragments = [
+            Fragment(f"SRC-001-F00{index}", "SRC-001", "source.txt", "Sección", "a" * 50)
+            for index in range(1, 4)
+        ]
+        agent.analyze("Prueba", "dominio", fragments, maximum_questions=1)
+        self.assertEqual(28, agent.get_last_telemetry()["total_tokens"])
+        self.assertEqual(4, agent.get_last_telemetry()["calls"])
 
 
 if __name__ == "__main__":

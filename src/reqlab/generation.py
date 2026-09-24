@@ -32,7 +32,8 @@ class DeepSeekGenerationAgent:
         self.retriever = retriever
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.base_url = (base_url or os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com").rstrip("/")
-        self.model = model or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
+        self.model = model or os.getenv("LLM_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-flash"
+        self.max_tokens = int(os.getenv("LLM_MAX_TOKENS") or "12000")
         self.system_name = system_name
         self.domain = domain
 
@@ -83,6 +84,8 @@ Contexto recuperado:
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.1,
+                "max_tokens": self.max_tokens,
+                "thinking": {"type": "disabled"},
                 "response_format": {"type": "json_object"},
             }
         ).encode("utf-8")

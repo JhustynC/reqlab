@@ -20,7 +20,7 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--corpus", required=True, help="Directorio del corpus con corpus_manifest.json")
         if name == "generate":
             command.add_argument("--output", required=True, help="Directorio para las salidas")
-            command.add_argument("--model", default=None, help="Modelo DeepSeek (por defecto: deepseek-chat)")
+            command.add_argument("--model", default=None, help="Modelo DeepSeek (por defecto: deepseek-flash)")
     validate = subcommands.add_parser("validate")
     validate.add_argument("--artifacts", required=True)
     validate.add_argument("--corpus", required=True)
@@ -63,6 +63,8 @@ def main() -> int:
             "retrieval_method": "tfidf_cosine",
             "top_k": 16,
             "temperature": 0.1,
+            "thinking_mode": "disabled",
+            "max_tokens": generator.max_tokens,
         }
         write_outputs(artifacts, fragments, args.output, metadata=metadata, retrieval_runs=retrieval_runs, ambiguity_registry=ambiguity_registry)
         print(f"Generación completada: {len(artifacts)} artefactos en {args.output}")

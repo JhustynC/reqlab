@@ -103,9 +103,38 @@ export class WorkspaceStore {
   }
   message(error: unknown): string {
     if (typeof error === 'object' && error && 'error' in error) {
-      const response = (error as { error?: { detail?: string } }).error;
-      if (response?.detail) return response.detail;
+      const response = (error as { error?: { detail?: unknown; message?: unknown } | string }).error;
+      if (typeof response === 'string' && response.trim()) return response;
+      if (response && typeof response === 'object') {
+        const detail = response.detail;
+        if (typeof detail === 'string' && detail.trim()) return detail;
+        if (Array.isArray(detail)) {
+          const messages = detail.map((item) => this.validationMessage(item)).filter(Boolean);
+          if (messages.length) return messages.join(' · ');
+        }
+        if (typeof response.message === 'string' && response.message.trim()) {
+          return response.message;
+        }
+      }
     }
     return error instanceof Error ? error.message : 'No se pudo completar la operación.';
+  }
+
+  private validationMessage(detail: unknown): string {
+    if (typeof detail === 'string') return detail;
+    if (!detail || typeof detail !== 'object') return '';
+    const issue = detail as { loc?: unknown; msg?: unknown; message?: unknown };
+    const rawLocation = Array.isArray(issue.loc) ? issue.loc : [];
+    const location = rawLocation
+      .filter((part) => part !== 'body')
+      .map((part) => String(part))
+      .join(' › ');
+    const description =
+      typeof issue.msg === 'string'
+        ? issue.msg
+        : typeof issue.message === 'string'
+          ? issue.message
+          : 'Valor no valido.';
+    return location ? `${location}: ${description}` : description;
   }
 }

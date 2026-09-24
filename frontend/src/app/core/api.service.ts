@@ -4,7 +4,6 @@ import { Observable } from 'rxjs';
 import {
   Artifact,
   ArtifactType,
-  DefinitionAnalysis,
   DefinitionQuestion,
   FragmentDetail,
   FragmentSummary,
@@ -105,10 +104,15 @@ export class ApiService {
   }
   analyzeDefinition(
     projectId: string,
-  ): Observable<{ analysis: DefinitionAnalysis; questions: DefinitionQuestion[] }> {
-    return this.http.post<{ analysis: DefinitionAnalysis; questions: DefinitionQuestion[] }>(
+  ): Observable<{ run_id: string; status: string; resumed: boolean }> {
+    return this.http.post<{ run_id: string; status: string; resumed: boolean }>(
       `${this.base}/projects/${projectId}/definition/analyze`,
       {},
+    );
+  }
+  latestDefinitionRun(projectId: string): Observable<{ run: GenerationRun | null }> {
+    return this.http.get<{ run: GenerationRun | null }>(
+      `${this.base}/projects/${projectId}/definition/run/latest`,
     );
   }
   saveAnswers(

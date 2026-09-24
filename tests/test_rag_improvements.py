@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from pydantic import BaseModel, Field
 
@@ -11,7 +13,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "src"))
 
 from reqlab.agents import CONTRACTS, SpecializedGenerationAgent
-from reqlab.documents import TextSegmentationService
+from reqlab.documents import TextSegmentationService, infer_source_kind
 from reqlab.llm import OpenAICompatibleClient
 from reqlab.models import Fragment
 from reqlab.models import Artifact
@@ -59,6 +61,32 @@ class _AlwaysInvalidClient(OpenAICompatibleClient):
         return {"values": []}
 
 
+class _FakeHttpResponse:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self):
+        return json.dumps({
+            "model": "deepseek-flash",
+            "system_fingerprint": "fp_test",
+            "choices": [{
+                "message": {"content": '{"values":["ok"]}'},
+                "finish_reason": "stop",
+            }],
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 5,
+                "total_tokens": 25,
+                "prompt_cache_hit_tokens": 4,
+                "prompt_cache_miss_tokens": 16,
+                "completion_tokens_details": {"reasoning_tokens": 0},
+            },
+        }).encode("utf-8")
+
+
 class _Retriever:
     def __init__(self):
         self.top_k = 0
@@ -88,6 +116,28 @@ class _FailingValidatedClient:
 
 
 class RagImprovementTests(unittest.TestCase):
+    def test_deepseek_flash_request_disables_thinking_and_records_served_version(self):
+        client = OpenAICompatibleClient(
+            api_key="test",
+            base_url="https://api.deepseek.com",
+            model="deepseek-flash",
+            thinking_enabled=False,
+            max_tokens=12000,
+        )
+        with patch("reqlab.llm.urlopen", return_value=_FakeHttpResponse()) as mocked:
+            response = client.complete_json("Devuelve JSON", "Entrada")
+
+        request = mocked.call_args.args[0]
+        body = json.loads(request.data.decode("utf-8"))
+        telemetry = client.get_last_telemetry()
+        self.assertEqual({"values": ["ok"]}, response)
+        self.assertEqual("deepseek-flash", body["model"])
+        self.assertEqual({"type": "disabled"}, body["thinking"])
+        self.assertEqual(12000, body["max_tokens"])
+        self.assertEqual("deepseek-flash", telemetry["served_model"])
+        self.assertEqual("fp_test", telemetry["system_fingerprint"])
+        self.assertEqual("disabled", telemetry["thinking_mode"])
+
     def test_e5_query_uses_only_query_prefix(self):
         provider = SentenceTransformerEmbeddingProvider("test", "query: ", "passage: ")
         encoder = _FakeEncoder()
@@ -169,6 +219,33 @@ class RagImprovementTests(unittest.TestCase):
         )
         self.assertTrue(fragments)
         self.assertTrue(any(fragment.heading.startswith("De:") for fragment in fragments))
+
+    def test_source_kind_is_inferred_without_requiring_a_document_template(self):
+        self.assertEqual(
+            "interview",
+            infer_source_kind(
+                "transcripcion_cliente.txt",
+                "Entrevistador: ¿Qué ocurre?\nEntrevistado: Se pierden casos.\nPregunta: ¿Con qué frecuencia?",
+            ),
+        )
+        self.assertEqual(
+            "email",
+            infer_source_kind(
+                "entrada.txt",
+                "De: cliente@example.com\nPara: soporte@example.com\nAsunto: Acceso\nNecesito ayuda.",
+            ),
+        )
+        self.assertEqual(
+            "document",
+            infer_source_kind("politica.pdf", "Documento formal sin marcadores conversacionales."),
+        )
+        self.assertEqual(
+            "document",
+            infer_source_kind(
+                "exportacion_legacy.txt",
+                "Origen: hoja manual\nAdvertencia: datos incompletos\nEstado: PEND\nResponsable: NORA\nNota: revisar",
+            ),
+        )
 
     def test_relation_validation_and_thresholds_are_reported(self):
         fragments = [Fragment("SRC-001-F001", "SRC-001", "source.txt", "Source", "Evidence")]

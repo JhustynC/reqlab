@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
 
 from ..dependencies import get_repository, get_service
 from ..errors import bad_request, not_found
@@ -8,6 +8,36 @@ from ..schemas import DefinitionAnswersUpdate, DefinitionConfirmRequest
 
 
 router = APIRouter(prefix="/projects/{project_id}/definition", tags=["definition"])
+
+
+def execute_definition(project_id: str, run_id: str) -> None:
+    repository = get_repository()
+    service = None
+
+    def progress(percent: int, message: str, step: str) -> None:
+        repository.update_run_progress(run_id, percent, message, step)
+
+    try:
+        service = get_service()
+        analysis = service.analyze_definition(
+            project_id,
+            progress_callback=progress,
+        )
+        progress(100, "Interpretación provisional disponible", "completed")
+        metrics = {
+            "coverage": analysis.get("coverage", {}),
+            "llm": service.definition_agent.get_last_telemetry(),
+        }
+        metrics["total_tokens"] = metrics["llm"].get("total_tokens")
+        repository.finish_run(run_id, "completed", metrics=metrics)
+    except Exception as error:
+        telemetry = service.definition_agent.get_last_telemetry() if service else {}
+        repository.finish_run(
+            run_id,
+            "failed",
+            str(error),
+            metrics={"llm": telemetry, "total_tokens": telemetry.get("total_tokens")},
+        )
 
 
 @router.get("/questions")
@@ -19,25 +49,47 @@ def questions(project_id: str) -> list[dict]:
         raise not_found(error) from error
 
 
-@router.post("/analyze")
-def analyze(project_id: str) -> dict:
-    repository = get_repository()
-    run_id = None
+@router.post("/analyze", status_code=202)
+def analyze(project_id: str, background_tasks: BackgroundTasks) -> dict:
     try:
+        repository = get_repository()
         repository.get_project(project_id)
-        run_id = repository.start_run(project_id, "definition", "definition.main")
-        service = get_service()
-        analysis = service.analyze_definition(project_id)
-        telemetry = service.definition_agent.get_last_telemetry()
-        repository.finish_run(run_id, "completed", metrics={"llm": telemetry, "total_tokens": telemetry.get("total_tokens")})
-        return {"analysis": analysis, "questions": repository.list_questions(project_id)}
+        if repository.count_fragments(project_id) < 1:
+            raise ValueError("Primero debe cargar y procesar al menos una fuente.")
+        current = repository.latest_run(project_id, agent_id="definition.main")
+        if current and current["status"] == "running":
+            return {"run_id": current["id"], "status": "running", "resumed": True}
+        run_id = repository.start_run(
+            project_id,
+            "definition",
+            "definition.main",
+            {
+                "progress": 0,
+                "step": "queued",
+                "message": "Análisis de definición en cola",
+                "experimental_config": (
+                    get_service().settings.experimental_snapshot()
+                    if get_service().settings
+                    else {}
+                ),
+            },
+        )
+        background_tasks.add_task(execute_definition, project_id, run_id)
+        return {"run_id": run_id, "status": "running", "resumed": False}
     except KeyError as error:
         raise not_found(error) from error
     except (ValueError, RuntimeError) as error:
-        if run_id is not None:
-            telemetry = get_service().definition_agent.get_last_telemetry()
-            repository.finish_run(run_id, "failed", str(error), metrics={"llm": telemetry, "total_tokens": telemetry.get("total_tokens")})
         raise bad_request(error) from error
+
+
+@router.get("/run/latest")
+def latest_definition_run(project_id: str) -> dict:
+    try:
+        repository = get_repository()
+        repository.get_project(project_id)
+        return {"run": repository.latest_run(project_id, agent_id="definition.main")}
+    except KeyError as error:
+        raise not_found(error) from error
 
 
 @router.put("/answers")

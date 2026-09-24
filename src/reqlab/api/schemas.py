@@ -29,7 +29,11 @@ class TextSourceCreate(BaseModel):
 
 class DefinitionAnswer(BaseModel):
     question_key: str = Field(min_length=1, max_length=80)
-    answer: str = Field(default="", max_length=5000)
+    # La interpretacion provisional se construye a partir de todo el corpus y
+    # puede superar con legitimidad los 5 000 caracteres en dimensiones como
+    # alcance, reglas o calidad. El limite sigue acotando el payload, pero no
+    # debe impedir que el usuario confirme un perfil generado por ReqLab.
+    answer: str = Field(default="", max_length=20000)
 
 
 class DefinitionAnswersUpdate(BaseModel):
