@@ -355,6 +355,7 @@ class SemanticValidationService:
         abstained = 0
         total_latency = 0.0
         total_input_tokens = 0
+        total_output_tokens = 0
         tokens_known = True
         for item in results:
             status = item.get("technical_status")
@@ -369,10 +370,11 @@ class SemanticValidationService:
             abstained += bool(policy.get("abstained"))
             telemetry = item.get("telemetry", {})
             total_latency += float(telemetry.get("latency_ms") or 0)
-            if telemetry.get("input_tokens") is None:
+            if telemetry.get("input_tokens") is None or telemetry.get("output_tokens") is None:
                 tokens_known = False
             else:
                 total_input_tokens += int(telemetry["input_tokens"])
+                total_output_tokens += int(telemetry["output_tokens"])
         return {
             "completed": completed,
             "failed": failed,
@@ -382,4 +384,6 @@ class SemanticValidationService:
             "labels": label_counts,
             "total_latency_ms": round(total_latency, 2),
             "total_input_tokens": total_input_tokens if tokens_known and results else None,
+            "total_output_tokens": total_output_tokens if tokens_known and results else None,
+            "total_tokens": total_input_tokens + total_output_tokens if tokens_known and results else None,
         }

@@ -12,6 +12,8 @@ import {
   GenerationRecommendations,
   GenerationRun,
   Project,
+  ProjectTokenUsage,
+  RerankingSettings,
   RevisionProposal,
   Source,
   SourcePreview,
@@ -29,6 +31,15 @@ export class ApiService {
   }
   getProject(projectId: string): Observable<Project> {
     return this.http.get<Project>(`${this.base}/projects/${projectId}`);
+  }
+  getRerankingSettings(): Observable<RerankingSettings> {
+    return this.http.get<RerankingSettings>(`${this.base}/projects/settings/reranking`);
+  }
+  saveRerankingSettings(value: Pick<RerankingSettings, 'enabled' | 'provider'>): Observable<RerankingSettings> {
+    return this.http.put<RerankingSettings>(`${this.base}/projects/settings/reranking`, value);
+  }
+  getProjectTokenUsage(projectId: string): Observable<ProjectTokenUsage> {
+    return this.http.get<ProjectTokenUsage>(`${this.base}/projects/${projectId}/token-usage`);
   }
   createProject(payload: {
     name: string;

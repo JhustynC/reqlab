@@ -153,7 +153,7 @@ export interface GenerationRun {
     experimental_config?: {
       llm?: { model?: string; base_url?: string };
       embedding?: { model?: string };
-      reranker?: { enabled?: boolean; model?: string };
+      reranker?: { enabled?: boolean; provider?: 'local' | 'jev'; model?: string };
       retrieval?: { method?: string; top_k?: number };
       segmentation?: { chunk_size?: number; overlap?: number };
       prompt_version?: string;
@@ -164,6 +164,20 @@ export interface GenerationRun {
       total_attempts?: number;
     };
   };
+}
+
+export interface RerankingSettings {
+  enabled: boolean;
+  provider: 'local' | 'jev';
+  model: string;
+  jev_available: boolean;
+}
+
+export interface ProjectTokenUsage {
+  total_tokens: number;
+  by_phase: { sources: number; definition: number; generation: number; revision: number; semantic_validation: number; jev: number };
+  unreported_runs: number;
+  scope: string;
 }
 
 export interface RevisionProposal {

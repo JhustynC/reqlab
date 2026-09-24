@@ -42,6 +42,8 @@ Si una definición se confirma nuevamente después de haber generado resultados,
 
 La recuperación es híbrida: combina TF-IDF y similitud vectorial mediante Reciprocal Rank Fusion, con reranking multilingüe opcional. Los embeddings se calculan localmente con `sentence-transformers`; DeepSeek es el proveedor LLM validado para interpretar el corpus, generar preguntas adaptativas y artefactos, y proponer revisiones.
 
+Desde Configuración en la página de Proyectos se puede activar el reranking y elegir entre el modelo local y Jev vía OpenRouter. La elección se guarda en SQLite y se aplica a las siguientes generaciones y revisiones. El modelo local usa CPU y memoria del equipo; Jev envía la consulta y los fragmentos candidatos a OpenRouter, consume créditos y requiere `OPENROUTER_API_KEY` en `.env`. Si Jev falla, la ejecución informa el error para que no parezca que se usó el proveedor seleccionado. Fuentes se procesa localmente y no consume tokens de API. En Revisión, la pestaña Ejecución muestra los tokens registrados por proyecto, con desglose de Definición, Generación, Revisiones, Validación semántica y Jev. Las ejecuciones anteriores sin telemetría completa se indican como tales.
+
 Cada ejecución conserva una instantánea de su configuración técnica. Los resultados incluyen relaciones explícitas RF–RNF–HU, validación por artefacto y vínculos separados hacia la evidencia documental. Angular presenta esta información en las vistas de revisión, trazabilidad, observaciones y ejecución.
 
 Las observaciones son alertas, no decisiones automáticas. Cada una permite abrir el artefacto afectado para editarlo, reclasificarlo, cambiar su estado o solicitar una propuesta asistida. Una reclasificación crea una nueva versión, asigna una clave acorde con el nuevo tipo y actualiza las relaciones internas que utilizaban la clave anterior.
@@ -57,7 +59,7 @@ Para habilitar una prueba remota, configure en `.env`:
 ```text
 SEMANTIC_VALIDATION_ENABLED=True
 SEMANTIC_VALIDATION_MODE=shadow
-TYPESAFE_API_KEY=<clave>
+OPENROUTER_API_KEY=<clave>
 TYPESAFE_BASE_URL=https://openrouter.ai/api
 TYPESAFE_ENDPOINT_PATH=/alpha/decisions
 TYPESAFE_MODEL=typesafe/jev-1.13

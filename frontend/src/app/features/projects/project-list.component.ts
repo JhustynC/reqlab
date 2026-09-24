@@ -10,7 +10,7 @@ import { TopbarComponent } from '../../shared/topbar.component';
   selector: 'app-project-list',
   imports: [FormsModule, IconComponent, TopbarComponent],
   template: `
-    <app-topbar (settingsRequested)="openArchived()" />
+    <app-topbar (settingsRequested)="openSettings()" />
     <main class="landing" id="inicio-reqlab">
       <section class="hero">
         <div>
@@ -232,26 +232,52 @@ import { TopbarComponent } from '../../shared/topbar.component';
       </div>
     }
 
-    @if (archivedOpen() && !projectToDelete()) {
-      <div class="modal-backdrop" (click)="archivedOpen.set(false)">
-        <section class="modal-card archived-dialog" role="dialog" aria-modal="true" aria-labelledby="archived-title" (click)="$event.stopPropagation()">
-          <button class="icon-btn modal-close" type="button" (click)="archivedOpen.set(false)" aria-label="Cerrar">×</button>
-          <h2 id="archived-title">Proyectos archivados</h2>
-          <p>Estos proyectos conservan sus fuentes, definiciones y artefactos. Puedes devolverlos a la lista principal.</p>
-          @if (store.error()) { <div class="alert error">{{ store.error() }}</div> }
-          <div class="archived-list">
-            @for (project of store.archivedProjects(); track project.id) {
-              <div class="archived-project-row">
-                <span class="project-icon"><app-icon name="archive" /></span>
-                <div class="grow"><strong>{{ project.name }}</strong><small>{{ project.source_count }} fuentes · archivado {{ updatedLabel(project.archived_at || project.updated_at) }}</small></div>
-                <button class="btn soft" type="button" (click)="restore(project)" [disabled]="store.loading()"><app-icon name="restore" /> Desarchivar</button>
-                <button class="icon-btn danger" type="button" title="Eliminar proyecto" [attr.aria-label]="'Eliminar ' + project.name" (click)="requestDelete(project)"><app-icon name="trash" /></button>
-              </div>
-            } @empty {
-              <div class="archived-empty"><app-icon name="archive" /><p>No hay proyectos archivados.</p></div>
-            }
+    @if (settingsOpen() && !projectToDelete()) {
+      <div class="modal-backdrop" (click)="settingsOpen.set(false)">
+        <section class="modal-card settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" (click)="$event.stopPropagation()">
+          <button class="icon-btn modal-close" type="button" (click)="settingsOpen.set(false)" aria-label="Cerrar">×</button>
+          <h2 id="settings-title">Configuración</h2>
+          <div class="settings-layout">
+            <nav class="settings-menu" aria-label="Secciones de configuración">
+              <button type="button" [class.active]="settingsSection() === 'archived'" (click)="settingsSection.set('archived')"><app-icon name="archive" /> Archivados</button>
+              <button type="button" [class.active]="settingsSection() === 'reranking'" (click)="settingsSection.set('reranking')"><app-icon name="settings" /> Reranking</button>
+            </nav>
+            <div class="settings-content">
+              @if (store.error()) { <div class="alert error">{{ store.error() }}</div> }
+              @if (settingsSection() === 'archived') {
+                <h3>Proyectos archivados</h3>
+                <p>Conservan sus fuentes y artefactos. Puedes devolverlos a la lista principal.</p>
+                <div class="archived-list">
+                  @for (project of store.archivedProjects(); track project.id) {
+                    <div class="archived-project-row">
+                      <span class="project-icon"><app-icon name="archive" /></span>
+                      <div class="grow"><strong>{{ project.name }}</strong><small>{{ project.source_count }} fuentes · archivado {{ updatedLabel(project.archived_at || project.updated_at) }}</small></div>
+                      <button class="btn soft" type="button" (click)="restore(project)" [disabled]="store.loading()"><app-icon name="restore" /> Desarchivar</button>
+                      <button class="icon-btn danger" type="button" title="Eliminar proyecto" [attr.aria-label]="'Eliminar ' + project.name" (click)="requestDelete(project)"><app-icon name="trash" /></button>
+                    </div>
+                  } @empty {
+                    <div class="archived-empty"><app-icon name="archive" /><p>No hay proyectos archivados.</p></div>
+                  }
+                </div>
+              } @else {
+                <h3>Reranking de evidencia</h3>
+                <p>Reordena los fragmentos recuperados antes de generar o revisar artefactos. La elección se aplica a las próximas ejecuciones de todos los proyectos.</p>
+                <label class="settings-toggle"><input type="checkbox" name="rerankingEnabled" [(ngModel)]="draftReranking.enabled" /><span><strong>Activar reranking</strong><small>Si está apagado, se usa el orden de la recuperación híbrida (RRF).</small></span></label>
+                @if (draftReranking.enabled) {
+                  <div class="reranking-options" role="group" aria-label="Proveedor de reranking">
+                    <button type="button" class="reranking-option" [class.active]="draftReranking.provider === 'local'" [attr.aria-pressed]="draftReranking.provider === 'local'" (click)="draftReranking.provider = 'local'">
+                      <strong>Local</strong><span>Usa un modelo en este equipo. La primera ejecución puede descargarlo; consume memoria y tiempo de CPU, sin tokens de API adicionales.</span>
+                    </button>
+                    <button type="button" class="reranking-option" [class.active]="draftReranking.provider === 'jev'" [attr.aria-pressed]="draftReranking.provider === 'jev'" [disabled]="!store.rerankingSettings()?.jev_available" (click)="draftReranking.provider = 'jev'">
+                      <strong>Jev · OpenRouter</strong><span>Envía la consulta y los fragmentos candidatos a OpenRouter. Requiere conexión y clave, consume créditos y puede añadir latencia.</span>
+                    </button>
+                  </div>
+                  @if (!store.rerankingSettings()?.jev_available) { <p class="settings-note">Jev no está disponible: configura OPENROUTER_API_KEY en el servidor.</p> }
+                }
+                <div class="actions"><button class="btn primary" type="button" [disabled]="store.loading()" (click)="saveReranking()">Guardar cambios</button></div>
+              }
+            </div>
           </div>
-          <div class="actions"><button class="btn primary" type="button" (click)="archivedOpen.set(false)">Cerrar</button></div>
         </section>
       </div>
     }
@@ -278,7 +304,9 @@ export class ProjectListComponent implements OnInit, OnDestroy {
   readonly store = inject(WorkspaceStore);
   private readonly router = inject(Router);
   readonly showForm = signal(false);
-  readonly archivedOpen = signal(false);
+  readonly settingsOpen = signal(false);
+  readonly settingsSection = signal<'archived' | 'reranking'>('archived');
+  draftReranking: { enabled: boolean; provider: 'local' | 'jev' } = { enabled: false, provider: 'local' };
   readonly projectToDelete = signal<Project | null>(null);
   readonly filter = signal<'Todos' | 'En curso' | 'Exportados'>('Todos');
   readonly filters: Array<'Todos' | 'En curso' | 'Exportados'> = [
@@ -357,9 +385,16 @@ export class ProjectListComponent implements OnInit, OnDestroy {
       await this.router.navigate(['/projects', project.id, 'sources']);
     }
   }
-  async openArchived(): Promise<void> {
-    this.archivedOpen.set(true);
+  async openSettings(): Promise<void> {
+    this.settingsSection.set('archived');
+    this.settingsOpen.set(true);
     await this.store.loadArchivedProjects();
+    await this.store.loadRerankingSettings();
+    const current = this.store.rerankingSettings();
+    if (current) this.draftReranking = { enabled: current.enabled, provider: current.provider };
+  }
+  async saveReranking(): Promise<void> {
+    await this.store.saveRerankingSettings(this.draftReranking);
   }
   async archive(project: Project): Promise<void> {
     await this.store.setProjectArchived(project.id, true);

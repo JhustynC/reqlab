@@ -380,7 +380,9 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
             <div>
               <small>Reranking</small
               ><strong>{{
-                run.parameters.experimental_config?.reranker?.enabled ? 'Activo' : 'Desactivado'
+                run.parameters.experimental_config?.reranker?.enabled
+                  ? (run.parameters.experimental_config?.reranker?.provider === 'jev' ? 'Jev · OpenRouter' : 'Local')
+                  : 'Desactivado'
               }}</strong>
             </div>
             <div>
@@ -398,8 +400,14 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
               ><strong>{{ formatLatency(run.parameters.metrics?.total_latency_ms) }}</strong>
             </div>
             <div>
-              <small>Tokens registrados</small
-              ><strong>{{ formatTokens(run.parameters.metrics?.total_tokens) }}</strong>
+              <small>Tokens registrados · proyecto</small
+              ><strong>{{ formatTokens(store.tokenUsage()?.total_tokens) }}</strong>
+              @if (store.tokenUsage(); as usage) {
+                <small>Fuentes: {{ formatTokens(usage.by_phase.sources) }} · Definición: {{ formatTokens(usage.by_phase.definition) }}</small>
+                <small>Generación: {{ formatTokens(usage.by_phase.generation) }} · Jev: {{ formatTokens(usage.by_phase.jev) }}</small>
+                <small>Revisiones: {{ formatTokens(usage.by_phase.revision) }} · Validación semántica: {{ formatTokens(usage.by_phase.semantic_validation) }}</small>
+                @if (usage.unreported_runs) { <small>{{ usage.unreported_runs }} ejecuciones antiguas sin telemetría completa.</small> }
+              }
             </div>
           </div>
           <p class="stage-desc">

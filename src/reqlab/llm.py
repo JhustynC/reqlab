@@ -62,6 +62,9 @@ class OpenAICompatibleClient:
     def get_last_telemetry(self) -> dict[str, Any]:
         return dict(self._telemetry.get())
 
+    def reset_telemetry(self) -> None:
+        self._telemetry.set({})
+
     def _set_telemetry(self, telemetry: dict[str, Any]) -> None:
         self._telemetry.set(dict(telemetry))
 
@@ -116,11 +119,14 @@ class OpenAICompatibleClient:
         elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
         usage = body.get("usage", {}) if isinstance(body, dict) else {}
+        total_tokens = usage.get("total_tokens")
+        if total_tokens is None and usage.get("prompt_tokens") is not None and usage.get("completion_tokens") is not None:
+            total_tokens = usage["prompt_tokens"] + usage["completion_tokens"]
         self._set_telemetry({
             "latency_ms": elapsed_ms,
             "prompt_tokens": usage.get("prompt_tokens"),
             "completion_tokens": usage.get("completion_tokens"),
-            "total_tokens": usage.get("total_tokens"),
+            "total_tokens": total_tokens,
             "attempts": 1,
         })
 

@@ -21,12 +21,22 @@ def questions(project_id: str) -> list[dict]:
 
 @router.post("/analyze")
 def analyze(project_id: str) -> dict:
+    repository = get_repository()
+    run_id = None
     try:
-        analysis = get_service().analyze_definition(project_id)
-        return {"analysis": analysis, "questions": get_repository().list_questions(project_id)}
+        repository.get_project(project_id)
+        run_id = repository.start_run(project_id, "definition", "definition.main")
+        service = get_service()
+        analysis = service.analyze_definition(project_id)
+        telemetry = service.definition_agent.get_last_telemetry()
+        repository.finish_run(run_id, "completed", metrics={"llm": telemetry, "total_tokens": telemetry.get("total_tokens")})
+        return {"analysis": analysis, "questions": repository.list_questions(project_id)}
     except KeyError as error:
         raise not_found(error) from error
     except (ValueError, RuntimeError) as error:
+        if run_id is not None:
+            telemetry = get_service().definition_agent.get_last_telemetry()
+            repository.finish_run(run_id, "failed", str(error), metrics={"llm": telemetry, "total_tokens": telemetry.get("total_tokens")})
         raise bad_request(error) from error
 
 

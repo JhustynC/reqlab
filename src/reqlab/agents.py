@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -290,12 +291,19 @@ class ProjectDefinitionAgent:
     def __init__(self, client: LLMClient, batch_character_limit: int = 18000):
         self.client = client
         self.batch_character_limit = batch_character_limit
+        self._telemetry: ContextVar[dict[str, Any]] = ContextVar(
+            f"definition_telemetry_{id(self)}", default={}
+        )
+
+    def get_last_telemetry(self) -> dict[str, Any]:
+        return dict(self._telemetry.get())
 
     def analyze(
         self, project_name: str, domain: str, fragments: list[Fragment], maximum_questions: int = 10
     ) -> dict[str, Any]:
         if not fragments:
             raise ValueError("No hay fragmentos para analizar.")
+        self._telemetry.set({"total_tokens": 0, "prompt_tokens": 0, "completion_tokens": 0, "calls": 0})
         batches = self._batches(fragments)
         summaries = [self._analyze_batch(project_name, domain, batch) for batch in batches]
         summaries = self._compress_summaries(project_name, domain, summaries)
@@ -313,16 +321,25 @@ class ProjectDefinitionAgent:
         return self._normalize_analysis(payload, fragments, maximum_questions, len(batches))
 
     def _complete_validated(self, schema: type, *, system_prompt: str, user_prompt: str) -> dict[str, Any]:
-        validated_completion = getattr(self.client, "complete_json_validated", None)
-        if callable(validated_completion):
-            return validated_completion(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                schema=schema,
+        try:
+            validated_completion = getattr(self.client, "complete_json_validated", None)
+            if callable(validated_completion):
+                return validated_completion(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    schema=schema,
+                ).model_dump()
+            return schema.model_validate(
+                self.client.complete_json(system_prompt=system_prompt, user_prompt=user_prompt)
             ).model_dump()
-        return schema.model_validate(
-            self.client.complete_json(system_prompt=system_prompt, user_prompt=user_prompt)
-        ).model_dump()
+        finally:
+            if hasattr(self.client, "get_last_telemetry"):
+                call = self.client.get_last_telemetry()
+                aggregate = self.get_last_telemetry()
+                for key in ("total_tokens", "prompt_tokens", "completion_tokens", "latency_ms", "attempts"):
+                    aggregate[key] = (aggregate.get(key) or 0) + (call.get(key) or 0)
+                aggregate["calls"] = (aggregate.get("calls") or 0) + 1
+                self._telemetry.set(aggregate)
 
     def _batches(self, fragments: list[Fragment]) -> list[list[Fragment]]:
         batches: list[list[Fragment]] = []

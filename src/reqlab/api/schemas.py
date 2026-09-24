@@ -13,6 +13,11 @@ class ProjectArchiveUpdate(BaseModel):
     archived: bool
 
 
+class RerankingPreferenceUpdate(BaseModel):
+    enabled: bool
+    provider: str = Field(pattern="^(local|jev)$")
+
+
 class TextSourceCreate(BaseModel):
     title: str = Field(min_length=2, max_length=160)
     source_type: str = Field(

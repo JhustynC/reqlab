@@ -13,6 +13,7 @@ from .generation_budget import (
     recommend_generation_budgets,
     validate_generation_limits,
 )
+from .jev_reranker import JevReranker
 from .llm import DeepSeekClient
 from .models import Artifact
 from .semantic_validation import SemanticValidationService
@@ -43,6 +44,8 @@ class ProjectApplicationService:
         self.client = client
         self.settings = settings
         self.reranker = reranker
+        self._local_reranker = reranker
+        self._jev_reranker: JevReranker | None = None
         self.semantic_client = semantic_client
         chunk_size = settings.chunk_size if settings else 1200
         chunk_overlap = settings.chunk_overlap if settings else 180
@@ -285,7 +288,17 @@ class ProjectApplicationService:
         if not self.vector_store.has_project(project_id):
             # Migración segura al espacio del modelo de embeddings configurado.
             self.vector_store.upsert_fragments(project_id, fragments)
-        retriever = self._retriever(project_id, fragments)
+        reranking = self.reranking_configuration()
+        if run_id:
+            captured = (
+                self.repository.get_run(run_id)["parameters"]
+                .get("experimental_config", {})
+                .get("reranker", {})
+            )
+            if captured.get("provider") in {"local", "jev"} and isinstance(captured.get("enabled"), bool):
+                reranking.update({"enabled": captured["enabled"], "provider": captured["provider"],
+                                  "model": captured.get("model", reranking["model"])})
+        retriever = self._retriever(project_id, fragments, reranking)
         artifacts: list[Artifact] = []
         retrieval_log: dict[str, list[dict[str, Any]]] = {}
         telemetry_log: dict[str, dict[str, Any]] = {}
@@ -302,11 +315,25 @@ class ProjectApplicationService:
             for position, artifact_type in enumerate(("RF", "RNF", "HU"), start=1):
                 contract = CONTRACTS[artifact_type]
                 progress(15 + (position - 1) * 24, f"Ejecutando {contract.agent_id}", f"generating_{artifact_type.lower()}")
+                child_parameters = self.run_parameters(limits, recommendations, artifact_type)
+                child_parameters["parent_run_id"] = parent_run
+                if "experimental_config" in child_parameters:
+                    child_parameters["experimental_config"]["reranker"] = {
+                        key: reranking[key] for key in ("enabled", "provider", "model")
+                    }
                 child_run_id = self.repository.start_run(
                     project_id,
                     "generation",
                     contract.agent_id,
-                    self.run_parameters(limits, recommendations, artifact_type),
+                    child_parameters,
+                )
+                if hasattr(self.client, "reset_telemetry"):
+                    self.client.reset_telemetry()
+                if isinstance(retriever.reranker, JevReranker):
+                    retriever.reranker.reset_telemetry()
+                telemetry_before = (
+                    self.client.get_last_telemetry()
+                    if hasattr(self.client, "get_last_telemetry") else {}
                 )
                 try:
                     agent = SpecializedGenerationAgent(
@@ -322,12 +349,14 @@ class ProjectApplicationService:
                         limit=limits[artifact_type], existing_artifacts=list(artifacts)
                     )
                     artifacts.extend(generated)
-                    score_name = "reranker_score" if self.reranker else "rrf_score"
+                    score_name = "reranker_score" if reranking["enabled"] else "rrf_score"
                     retrieval_log[artifact_type] = [
                         {"fragment_id": fragment.fragment_id, score_name: round(score, 8)}
                         for fragment, score in evidence
                     ]
                     agent_metrics = getattr(agent, "last_telemetry", {}) or {}
+                    if isinstance(retriever.reranker, JevReranker):
+                        agent_metrics["jev"] = retriever.reranker.get_last_telemetry()
                     telemetry_log[artifact_type] = agent_metrics
                     self.repository.finish_run(child_run_id, "completed", metrics=agent_metrics)
                 except Exception as error:
@@ -336,6 +365,11 @@ class ProjectApplicationService:
                         if hasattr(self.client, "get_last_telemetry")
                         else None
                     )
+                    failure_metrics = dict(failure_metrics or {})
+                    if failure_metrics == telemetry_before:
+                        failure_metrics = {}
+                    if isinstance(retriever.reranker, JevReranker):
+                        failure_metrics["jev"] = retriever.reranker.get_last_telemetry()
                     self.repository.finish_run(
                         child_run_id, "failed", str(error), metrics=failure_metrics
                     )
@@ -354,6 +388,10 @@ class ProjectApplicationService:
             # Métricas agregadas para el parent run
             total_latency = sum(item.get("latency_ms", 0.0) for item in telemetry_log.values())
             total_tokens = sum(item.get("total_tokens", 0) or 0 for item in telemetry_log.values())
+            jev_tokens = sum(
+                (item.get("jev") or {}).get("total_tokens", 0) or 0
+                for item in telemetry_log.values()
+            )
             total_attempts = sum(item.get("attempts", 1) for item in telemetry_log.values())
             generated_counts = {
                 artifact_type: sum(1 for artifact in artifacts if artifact.artifact_type == artifact_type)
@@ -362,6 +400,7 @@ class ProjectApplicationService:
             summary_metrics = {
                 "total_latency_ms": round(total_latency, 2),
                 "total_tokens": total_tokens or None,
+                "jev_tokens": jev_tokens or None,
                 "total_attempts": total_attempts,
                 "generated_counts": generated_counts,
                 "budget_saturation": {
@@ -387,7 +426,26 @@ class ProjectApplicationService:
             raise ValueError("Indique qué desea mejorar en el artefacto.")
         fragments = self.repository.list_fragments(project_id)
         retriever = self._retriever(project_id, fragments)
-        return RevisionAgent(self.client, retriever).propose(self.repository.get_artifact(artifact_id), instruction)
+        artifact = self.repository.get_artifact(artifact_id)
+        run_id = self.repository.start_run(project_id, "revision", "revision.main")
+        if hasattr(self.client, "reset_telemetry"):
+            self.client.reset_telemetry()
+        previous_llm = self.client.get_last_telemetry() if hasattr(self.client, "get_last_telemetry") else {}
+        if isinstance(retriever.reranker, JevReranker):
+            retriever.reranker.reset_telemetry()
+        try:
+            proposal = RevisionAgent(self.client, retriever).propose(artifact, instruction)
+            status = "completed"
+            return proposal
+        except Exception:
+            status = "failed"
+            raise
+        finally:
+            current_llm = self.client.get_last_telemetry() if hasattr(self.client, "get_last_telemetry") else {}
+            metrics = dict(current_llm) if current_llm != previous_llm else {}
+            if isinstance(retriever.reranker, JevReranker):
+                metrics["jev"] = retriever.reranker.get_last_telemetry()
+            self.repository.finish_run(run_id, status, metrics=metrics)
 
     def accept_revision(self, artifact_id: str, proposal: Artifact, instruction: str) -> dict[str, Any]:
         updated = self.repository.update_artifact(artifact_id, proposal, "ai_revision", instruction)
@@ -547,14 +605,50 @@ class ProjectApplicationService:
             confidence_threshold=self.settings.semantic_confidence_threshold,
         )
 
-    def _retriever(self, project_id: str, fragments: list) -> HybridRetrievalAgent:
+    def reranking_configuration(self) -> dict[str, Any]:
+        preference = self.repository.get_reranking_preference()
+        enabled = preference["enabled"] if preference is not None else bool(
+            self.reranker is not None or (self.settings and self.settings.reranker_enabled)
+        )
+        provider = preference["provider"] if preference is not None else (self.settings.reranker_provider if self.settings else "local")
+        return {
+            "enabled": enabled,
+            "provider": provider,
+            "model": (
+                self.settings.jev_model if self.settings and provider == "jev"
+                else self.settings.reranker_model if self.settings else "local"
+            ),
+            "jev_available": bool(self.settings and self.settings.typesafe_api_key),
+        }
+
+    def _active_reranker(self, configuration: dict[str, Any]):
+        if not configuration["enabled"]:
+            return None
+        if configuration["provider"] == "jev":
+            if not configuration["jev_available"]:
+                raise RuntimeError("Jev requiere OPENROUTER_API_KEY en .env.")
+            if self._jev_reranker is None:
+                self._jev_reranker = JevReranker(
+                    self.settings.typesafe_api_key,
+                    self.settings.jev_model,
+                    f"{self.settings.typesafe_base_url}{self.settings.typesafe_endpoint_path}",
+                )
+            return self._jev_reranker
+        if self._local_reranker is None:
+            self._local_reranker = CrossEncoderReranker(configuration["model"])
+        return self._local_reranker
+
+    def _retriever(
+        self, project_id: str, fragments: list, configuration: dict[str, Any] | None = None
+    ) -> HybridRetrievalAgent:
+        configuration = configuration or self.reranking_configuration()
         return HybridRetrievalAgent(
             project_id,
             fragments,
             self.vector_store,
             lexical_weight=self.settings.rrf_lexical_weight if self.settings else 0.45,
             semantic_weight=self.settings.rrf_semantic_weight if self.settings else 0.55,
-            reranker=self.reranker,
+            reranker=self._active_reranker(configuration),
         )
 
     def generation_recommendations(self, project_id: str) -> dict[str, Any]:
@@ -591,7 +685,14 @@ class ProjectApplicationService:
             parameters["active_artifact_type"] = active_artifact_type
             parameters["active_limit"] = limits[active_artifact_type]
         if self.settings:
-            parameters["experimental_config"] = self.settings.experimental_snapshot()
+            snapshot = self.settings.experimental_snapshot()
+            configuration = self.reranking_configuration()
+            snapshot["reranker"] = {
+                "enabled": configuration["enabled"],
+                "provider": configuration["provider"],
+                "model": configuration["model"],
+            }
+            parameters["experimental_config"] = snapshot
         return parameters
 
     @staticmethod

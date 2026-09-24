@@ -1,7 +1,7 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { ApiService } from './api.service';
-import { Artifact, DefinitionQuestion, FragmentDetail, GenerationRun, Project, RevisionProposal, Source, ValidationReport } from './models';
+import { Artifact, DefinitionQuestion, FragmentDetail, GenerationRun, Project, ProjectTokenUsage, RerankingSettings, RevisionProposal, Source, ValidationReport } from './models';
 
 @Injectable({ providedIn: 'root' })
 export class WorkspaceStore {
@@ -16,6 +16,8 @@ export class WorkspaceStore {
   readonly selectedFragment = signal<FragmentDetail | null>(null);
   readonly validation = signal<ValidationReport | null>(null);
   readonly run = signal<GenerationRun | null>(null);
+  readonly tokenUsage = signal<ProjectTokenUsage | null>(null);
+  readonly rerankingSettings = signal<RerankingSettings | null>(null);
   readonly proposal = signal<RevisionProposal | null>(null);
   readonly loading = signal(false);
   readonly error = signal('');
@@ -29,6 +31,17 @@ export class WorkspaceStore {
   async loadArchivedProjects(): Promise<void> {
     await this.perform(async () => this.archivedProjects.set(await firstValueFrom(this.api.listProjects(true))));
   }
+  async loadRerankingSettings(): Promise<void> {
+    await this.perform(async () => this.rerankingSettings.set(await firstValueFrom(this.api.getRerankingSettings())));
+  }
+  async saveRerankingSettings(value: Pick<RerankingSettings, 'enabled' | 'provider'>): Promise<boolean> {
+    let saved = false;
+    await this.perform(async () => {
+      this.rerankingSettings.set(await firstValueFrom(this.api.saveRerankingSettings(value)));
+      saved = true;
+    });
+    return saved;
+  }
   async createProject(payload: { name: string; description: string; domain: string }): Promise<Project | null> {
     let created: Project | null = null;
     await this.perform(async () => { created = await firstValueFrom(this.api.createProject(payload)); });
@@ -37,15 +50,17 @@ export class WorkspaceStore {
   }
   async loadWorkspace(projectId: string): Promise<void> {
     await this.perform(async () => {
-      const [project, sources, questions, artifacts, validation, latestRun] = await Promise.all([
+      const [project, sources, questions, artifacts, validation, latestRun, tokenUsage] = await Promise.all([
         firstValueFrom(this.api.getProject(projectId)), firstValueFrom(this.api.listSources(projectId)),
         firstValueFrom(this.api.listQuestions(projectId)), firstValueFrom(this.api.listArtifacts(projectId)),
         firstValueFrom(this.api.latestValidation(projectId)),
         firstValueFrom(this.api.latestRun(projectId)),
+        firstValueFrom(this.api.getProjectTokenUsage(projectId)),
       ]);
       this.project.set(project); this.sources.set(sources); this.questions.set(questions);
       this.artifacts.set(artifacts); this.validation.set(validation.report);
       this.run.set(latestRun.run);
+      this.tokenUsage.set(tokenUsage);
       const selectedId = this.selectedArtifact()?.id;
       this.selectedArtifact.set(artifacts.find((item) => item.id === selectedId) ?? null);
     });

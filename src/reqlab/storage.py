@@ -125,6 +125,11 @@ class SQLiteRepository:
                     finished_at TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS artifacts (
                     id TEXT PRIMARY KEY,
                     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -770,6 +775,103 @@ class SQLiteRepository:
         result = dict(row)
         result["parameters"] = json.loads(result.pop("parameters_json"))
         return result
+
+    def get_reranking_preference(self) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT value_json FROM app_settings WHERE key = 'reranking'"
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_reranking_preference(self, enabled: bool, provider: str) -> dict[str, Any]:
+        if provider not in {"local", "jev"}:
+            raise ValueError("El proveedor de reranking debe ser local o jev.")
+        value = {"enabled": bool(enabled), "provider": provider}
+        with self.connection() as connection:
+            connection.execute(
+                "INSERT INTO app_settings (key, value_json) VALUES ('reranking', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+                (json.dumps(value),),
+            )
+        return value
+
+    def project_token_usage(self, project_id: str) -> dict[str, Any]:
+        """Suma ejecuciones principales sin contar dos veces los agentes hijos."""
+        self.get_project(project_id)
+        totals = {"sources": 0, "definition": 0, "generation": 0, "revision": 0,
+                  "semantic_validation": 0, "jev": 0}
+        unreported = 0
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT id, phase, agent_id, parameters_json FROM runs WHERE project_id = ?",
+                (project_id,),
+            ).fetchall()
+        runs = [(row, json.loads(row["parameters_json"] or "{}")) for row in rows]
+        children: dict[str, list[dict[str, Any]]] = {}
+        for row, parameters in runs:
+            parent_id = parameters.get("parent_run_id")
+            if parent_id and row["agent_id"].startswith("agent."):
+                children.setdefault(parent_id, []).append(parameters.get("metrics") or {})
+        for row, parameters in runs:
+            if row["agent_id"] in {"revision.main", "semantic.validator"}:
+                metrics = parameters.get("metrics") or {}
+                phase = "revision" if row["agent_id"] == "revision.main" else "semantic_validation"
+                tokens = metrics.get("total_tokens")
+                if isinstance(tokens, (int, float)):
+                    totals[phase] += max(0, int(tokens))
+                else:
+                    unreported += 1
+                if phase == "revision":
+                    jev_tokens = (metrics.get("jev") or {}).get("total_tokens")
+                    if isinstance(jev_tokens, (int, float)):
+                        totals["jev"] += max(0, int(jev_tokens))
+                continue
+            if row["agent_id"] not in {"definition.main", "orchestrator.main"}:
+                continue
+            metrics = parameters.get("metrics") or {}
+            if row["agent_id"] == "definition.main":
+                phase = "definition"
+                tokens = metrics.get("total_tokens")
+                if tokens is None:
+                    tokens = (metrics.get("llm") or {}).get("total_tokens")
+            else:
+                phase = "generation"
+                tokens = metrics.get("total_tokens")
+                jev_tokens = metrics.get("jev_tokens", metrics.get("jev_input_tokens"))
+                if tokens is None and row["id"] in children:
+                    known = []
+                    for child in children[row["id"]]:
+                        child_tokens = child.get("total_tokens")
+                        if isinstance(child_tokens, (int, float)):
+                            known.append(child_tokens)
+                        else:
+                            unreported += 1
+                    if known:
+                        tokens = sum(known)
+                    jev_tokens = sum(
+                        (child.get("jev") or {}).get("total_tokens", 0) or 0
+                        for child in children[row["id"]]
+                    )
+                if isinstance(jev_tokens, (int, float)):
+                    totals["jev"] += max(0, int(jev_tokens))
+            if isinstance(tokens, (int, float)):
+                totals[phase] += max(0, int(tokens))
+            else:
+                unreported += 1
+        if not any(row["agent_id"] == "definition.main" for row, _ in runs):
+            with self.connection() as connection:
+                legacy_definition = connection.execute(
+                    "SELECT 1 FROM project_profiles WHERE project_id = ? LIMIT 1",
+                    (project_id,),
+                ).fetchone()
+            if legacy_definition:
+                unreported += 1
+        return {
+            "total_tokens": sum(totals.values()),
+            "by_phase": totals,
+            "unreported_runs": unreported,
+            "scope": "Todas las ejecuciones registradas del proyecto",
+        }
 
     def update_run_progress(self, run_id: str, progress: int, message: str, step: str) -> None:
         run = self.get_run(run_id)

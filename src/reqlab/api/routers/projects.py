@@ -6,10 +6,32 @@ from ...services import ProjectApplicationService
 from ...storage import SQLiteRepository
 from ..dependencies import get_repository, get_service
 from ..errors import bad_request, not_found
-from ..schemas import ProjectArchiveUpdate, ProjectCreate
+from ..schemas import ProjectArchiveUpdate, ProjectCreate, RerankingPreferenceUpdate
 
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+
+@router.get("/settings/reranking")
+def get_reranking_preference() -> dict:
+    return get_service().reranking_configuration()
+
+
+@router.put("/settings/reranking")
+def set_reranking_preference(payload: RerankingPreferenceUpdate) -> dict:
+    service = get_service()
+    if payload.enabled and payload.provider == "jev" and not service.reranking_configuration()["jev_available"]:
+        raise bad_request(ValueError("Jev requiere una clave de OpenRouter en OPENROUTER_API_KEY."))
+    get_repository().save_reranking_preference(payload.enabled, payload.provider)
+    return service.reranking_configuration()
+
+
+@router.get("/{project_id}/token-usage")
+def project_token_usage(project_id: str) -> dict:
+    try:
+        return get_repository().project_token_usage(project_id)
+    except KeyError as error:
+        raise not_found(error) from error
 
 
 def summary(repository: SQLiteRepository, project: dict) -> dict:

@@ -53,6 +53,8 @@ class Settings:
     duplicate_threshold: float
     cross_type_duplicate_threshold: float
     prompt_version: str
+    reranker_provider: str = "local"
+    jev_model: str = "typesafe/jev-1.13"
     semantic_validation_enabled: bool = False
     semantic_validation_mode: str = "shadow"
     typesafe_api_key: str | None = None
@@ -71,6 +73,8 @@ class Settings:
             raise ValueError("LLM_MAX_RETRIES debe ser al menos 1.")
         if self.retrieval_top_k < 1:
             raise ValueError("RETRIEVAL_TOP_K debe ser mayor que cero.")
+        if self.reranker_provider not in {"local", "jev"}:
+            raise ValueError("RERANKER_PROVIDER debe ser local o jev.")
         if self.chunk_size < 300:
             raise ValueError("CHUNK_SIZE debe ser al menos 300 caracteres.")
         if self.chunk_overlap < 0 or self.chunk_overlap >= self.chunk_size:
@@ -106,7 +110,11 @@ class Settings:
                 "query_prefix": self.embedding_query_prefix,
                 "passage_prefix": self.embedding_passage_prefix,
             },
-            "reranker": {"enabled": self.reranker_enabled, "model": self.reranker_model},
+            "reranker": {
+                "enabled": self.reranker_enabled,
+                "provider": self.reranker_provider,
+                "model": self.jev_model if self.reranker_provider == "jev" else self.reranker_model,
+            },
             "retrieval": {
                 "method": "hybrid_rrf",
                 "top_k": self.retrieval_top_k,
@@ -169,6 +177,8 @@ class Settings:
             embedding_query_prefix=query_prefix,
             embedding_passage_prefix=passage_prefix,
             reranker_enabled=_env_bool("RERANKER_ENABLED", False),
+            reranker_provider=_env("RERANKER_PROVIDER", "local").lower(),
+            jev_model=_env("JEV_MODEL", "typesafe/jev-1.13"),
             reranker_model=_env(
                 "RERANKER_MODEL",
                 "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
@@ -183,7 +193,7 @@ class Settings:
             prompt_version=_env("PROMPT_VERSION", "reqlab-v2"),
             semantic_validation_enabled=_env_bool("SEMANTIC_VALIDATION_ENABLED", False),
             semantic_validation_mode=_env("SEMANTIC_VALIDATION_MODE", "shadow").lower(),
-            typesafe_api_key=_env("TYPESAFE_API_KEY") or None,
+            typesafe_api_key=_env("TYPESAFE_API_KEY") or _env("OPENROUTER_API_KEY") or None,
             # El acceso disponible para este piloto usa la ruta de OpenRouter.
             # Para la API directa de TypeSafe se pueden sobreescribir los tres
             # valores con api.typesafe.ai, jev-1.13.0 y /v1/systemone.
