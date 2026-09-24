@@ -225,6 +225,23 @@ class WebWorkflowTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.repository.get_project(project["id"])
 
+    def test_repository_closes_runs_interrupted_by_a_service_restart(self):
+        project = self.service.create_project("Proyecto interrumpido")
+        run_id = self.repository.start_run(
+            project["id"],
+            "definition",
+            "definition.main",
+            {"progress": 72, "step": "consolidating"},
+        )
+
+        recovered = self.repository.recover_interrupted_runs()
+        run = self.repository.get_run(run_id)
+
+        self.assertEqual(1, recovered)
+        self.assertEqual("failed", run["status"])
+        self.assertIn("reinicio", run["error_message"])
+        self.assertIsNotNone(run["finished_at"])
+
     def test_pasted_text_is_a_traceable_source_without_a_template(self):
         project = self.service.create_project("Proyecto abierto")
         source = self.service.ingest_text(
@@ -255,6 +272,49 @@ class WebWorkflowTests(unittest.TestCase):
         self.assertEqual(6, len(batch_prompts))
         for fragment in fragments:
             self.assertIn(fragment.fragment_id, combined)
+
+    def test_definition_summary_consolidation_is_local_and_preserves_citations(self):
+        client = FakeDeepSeekClient()
+        agent = ProjectDefinitionAgent(client, max_workers=2)
+        summaries = [
+            {
+                "findings": [
+                    {
+                        "dimension": "scope",
+                        "statement": "Registrar y dar seguimiento a solicitudes.",
+                        "source_fragments": [f"SRC-00{index + 1}-F001"],
+                    }
+                ],
+                "uncertainties": [
+                    {
+                        "dimension": "known_conflicts",
+                        "description": f"Decisión pendiente {index + 1}.",
+                        "source_fragments": [f"SRC-00{index + 1}-F001"],
+                    }
+                ],
+            }
+            for index in range(2)
+        ]
+        progress = []
+
+        compressed = agent._compress_summaries(
+            "Proyecto grande",
+            "soporte",
+            summaries,
+            progress_callback=lambda percent, message, step: progress.append(
+                (percent, message, step)
+            ),
+        )
+
+        self.assertEqual(1, len(compressed))
+        self.assertEqual(1, len(compressed[0]["findings"]))
+        self.assertEqual(
+            ["SRC-001-F001", "SRC-002-F001"],
+            compressed[0]["findings"][0]["source_fragments"],
+        )
+        self.assertEqual(2, len(compressed[0]["uncertainties"]))
+        self.assertEqual([], client.prompts)
+        self.assertTrue(any(step == "consolidating" for _, _, step in progress))
 
     def test_service_wires_optional_reranker_into_hybrid_retrieval(self):
         marker = object()

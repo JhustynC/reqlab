@@ -156,12 +156,18 @@ export interface GenerationRun {
       reranker?: { enabled?: boolean; model?: string };
       retrieval?: { method?: string; top_k?: number };
       segmentation?: { chunk_size?: number; overlap?: number };
+      definition?: {
+        batch_character_limit?: number;
+        max_workers?: number;
+        max_questions?: number;
+      };
       prompt_version?: string;
     };
     metrics?: {
       total_latency_ms?: number;
       total_tokens?: number;
       total_attempts?: number;
+      coverage?: { fragment_count: number; batch_count: number };
     };
   };
 }

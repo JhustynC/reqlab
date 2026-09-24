@@ -199,3 +199,62 @@ def safe_filename(filename: str) -> str:
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(name).stem).strip("._") or "fuente"
     suffix = Path(name).suffix.lower()
     return f"{stem}{suffix}"
+
+
+def infer_source_kind(filename: str, text: str) -> str:
+    """Infiere una estructura de segmentación sin exigir plantillas al usuario."""
+    name = Path(filename).stem.lower()
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    filename_rules = (
+        (
+            "document",
+            (
+                "procedimiento",
+                "catalogo",
+                "catálogo",
+                "acuerdo",
+                "resolucion",
+                "resolución",
+                "politica",
+                "política",
+                "norma",
+                "exportacion",
+                "exportación",
+                "export",
+            ),
+        ),
+        ("interview", ("entrevista", "interview", "transcripcion", "transcripción")),
+        ("email", ("correo", "email", "e-mail")),
+        ("conversation", ("chat", "conversacion", "conversación", "mensajes")),
+        ("meeting_notes", ("minuta", "acta", "reunion", "reunión", "meeting")),
+        ("note", ("informe", "nota", "resultados", "reporte", "report")),
+    )
+    for source_kind, markers in filename_rules:
+        if any(marker in name for marker in markers):
+            return source_kind
+
+    interview_turns = re.findall(
+        r"^(?:Entrevistador(?:a)?|Entrevistado(?:a)?|Pregunta|Respuesta|Q|A)\s*:",
+        normalized,
+        flags=re.MULTILINE | re.IGNORECASE,
+    )
+    if len(interview_turns) >= 3:
+        return "interview"
+
+    email_headers = re.findall(
+        r"^(?:De|Para|Asunto|Subject|From|To|Date|Fecha)\s*:",
+        normalized,
+        flags=re.MULTILINE | re.IGNORECASE,
+    )
+    if len(email_headers) >= 2:
+        return "email"
+
+    conversation_turns = re.findall(
+        r"^(?:\[?\d{1,2}:\d{2}\]?\s*)?[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 _-]{2,40}:\s+",
+        normalized,
+        flags=re.MULTILINE,
+    )
+    if len(conversation_turns) >= 5:
+        return "conversation"
+    return "document"

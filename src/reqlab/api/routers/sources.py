@@ -26,7 +26,10 @@ async def upload_sources(project_id: str, files: list[UploadFile] = File(...)) -
     service = get_service()
     accepted: list[dict] = []
     errors: list[dict] = []
-    for upload in files:
+    # El orden de FileList depende del navegador y de cómo se seleccionaron los
+    # archivos. Ordenar antes de asignar SRC-### hace reproducibles los IDs.
+    ordered_files = sorted(files, key=lambda item: (item.filename or "").casefold())
+    for upload in ordered_files:
         content = await upload.read()
         if len(content) > get_settings().max_upload_bytes:
             errors.append({"filename": upload.filename, "detail": "El archivo excede el límite permitido."})

@@ -13,7 +13,7 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT / "src"))
 
 from reqlab.agents import CONTRACTS, SpecializedGenerationAgent
-from reqlab.documents import TextSegmentationService
+from reqlab.documents import TextSegmentationService, infer_source_kind
 from reqlab.llm import OpenAICompatibleClient
 from reqlab.models import Fragment
 from reqlab.models import Artifact
@@ -219,6 +219,33 @@ class RagImprovementTests(unittest.TestCase):
         )
         self.assertTrue(fragments)
         self.assertTrue(any(fragment.heading.startswith("De:") for fragment in fragments))
+
+    def test_source_kind_is_inferred_without_requiring_a_document_template(self):
+        self.assertEqual(
+            "interview",
+            infer_source_kind(
+                "transcripcion_cliente.txt",
+                "Entrevistador: ¿Qué ocurre?\nEntrevistado: Se pierden casos.\nPregunta: ¿Con qué frecuencia?",
+            ),
+        )
+        self.assertEqual(
+            "email",
+            infer_source_kind(
+                "entrada.txt",
+                "De: cliente@example.com\nPara: soporte@example.com\nAsunto: Acceso\nNecesito ayuda.",
+            ),
+        )
+        self.assertEqual(
+            "document",
+            infer_source_kind("politica.pdf", "Documento formal sin marcadores conversacionales."),
+        )
+        self.assertEqual(
+            "document",
+            infer_source_kind(
+                "exportacion_legacy.txt",
+                "Origen: hoja manual\nAdvertencia: datos incompletos\nEstado: PEND\nResponsable: NORA\nNota: revisar",
+            ),
+        )
 
     def test_relation_validation_and_thresholds_are_reported(self):
         fragments = [Fragment("SRC-001-F001", "SRC-001", "source.txt", "Source", "Evidence")]

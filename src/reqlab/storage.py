@@ -770,6 +770,31 @@ class SQLiteRepository:
                 (json.dumps(parameters, ensure_ascii=False), run_id),
             )
 
+    def recover_interrupted_runs(self) -> int:
+        """Cierra ejecuciones que no pueden sobrevivir a un reinicio del proceso."""
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT id FROM runs WHERE status = 'running'"
+            ).fetchall()
+            if not rows:
+                return 0
+            now = utc_now()
+            connection.execute(
+                """UPDATE runs
+                   SET status = 'failed',
+                       error_message = 'La ejecución fue interrumpida por un reinicio del servicio. Puede iniciarla nuevamente.',
+                       finished_at = ?
+                   WHERE status = 'running'""",
+                (now,),
+            )
+            connection.execute(
+                """UPDATE projects
+                   SET status = 'ready_to_generate', updated_at = ?
+                   WHERE status = 'generating' AND definition_confirmed = 1""",
+                (now,),
+            )
+            return len(rows)
+
     def save_artifacts(self, project_id: str, artifacts: list[Artifact], change_origin: str = "generation") -> None:
         for artifact in artifacts:
             existing = self.get_artifact_by_key(project_id, artifact.artifact_id)

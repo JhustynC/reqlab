@@ -7,7 +7,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .agents import ProjectDefinitionAgent, RevisionAgent, SpecializedGenerationAgent, CONTRACTS
-from .documents import DocumentExtractionService, TextSegmentationService, safe_filename
+from .documents import (
+    DocumentExtractionService,
+    TextSegmentationService,
+    infer_source_kind,
+    safe_filename,
+)
 from .generation_budget import (
     normalize_generation_limits,
     recommend_generation_budgets,
@@ -44,7 +49,13 @@ class ProjectApplicationService:
         chunk_overlap = settings.chunk_overlap if settings else 180
         self.extractor = DocumentExtractionService()
         self.segmenter = TextSegmentationService(chunk_size=chunk_size, overlap=chunk_overlap)
-        self.definition_agent = ProjectDefinitionAgent(client)
+        self.definition_agent = ProjectDefinitionAgent(
+            client,
+            batch_character_limit=(
+                settings.definition_batch_character_limit if settings else 18000
+            ),
+            max_workers=settings.definition_max_workers if settings else 3,
+        )
 
     def create_project(self, name: str, description: str = "", domain: str = "") -> dict[str, Any]:
         if not name.strip():
@@ -76,9 +87,10 @@ class ProjectApplicationService:
         content: bytes,
         content_type: str = "",
         index_after: bool = True,
-        source_kind: str = "document",
+        source_kind: str | None = None,
     ) -> dict[str, Any]:
         extracted = self.extractor.extract(filename, content)
+        resolved_source_kind = source_kind or infer_source_kind(filename, extracted.text)
         duplicate = self.repository.find_source_by_hash(project_id, extracted.sha256)
         if duplicate:
             raise ValueError(f"La fuente ya fue cargada como {duplicate['source_code']}: {duplicate['original_name']}")
@@ -95,7 +107,7 @@ class ProjectApplicationService:
             str(stored_path),
             content_type,
             extracted.sha256,
-            source_kind,
+            resolved_source_kind,
         )
         try:
             stale_definition_ids = [
@@ -104,7 +116,7 @@ class ProjectApplicationService:
                 if fragment.source_id == "USR-DEF"
             ]
             fragments = self.segmenter.segment(
-                extracted.text, source_code, filename, source_kind=source_kind
+                extracted.text, source_code, filename, source_kind=resolved_source_kind
             )
             if not fragments:
                 raise ValueError("La segmentación no produjo fragmentos utilizables.")
@@ -187,7 +199,11 @@ class ProjectApplicationService:
         fragments = self.repository.list_fragments(project_id)
         self.vector_store.index(project_id, fragments)
 
-    def analyze_definition(self, project_id: str) -> dict[str, Any]:
+    def analyze_definition(
+        self,
+        project_id: str,
+        progress_callback: Callable[[int, str, str], None] | None = None,
+    ) -> dict[str, Any]:
         project = self.repository.get_project(project_id)
         fragments = [
             fragment
@@ -197,7 +213,11 @@ class ProjectApplicationService:
         if not fragments:
             raise ValueError("Primero debe cargar y procesar al menos una fuente.")
         analysis = self.definition_agent.analyze(
-            project["name"], project["domain"], fragments
+            project["name"],
+            project["domain"],
+            fragments,
+            maximum_questions=(self.settings.definition_max_questions if self.settings else 10),
+            progress_callback=progress_callback,
         )
         self.repository.replace_definition_analysis(
             project_id, list(ProjectDefinitionAgent.CORE_QUESTIONS), analysis

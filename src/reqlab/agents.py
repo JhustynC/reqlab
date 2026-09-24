@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from .llm import LLMClient
 from .models import Artifact, Fragment
@@ -287,20 +289,62 @@ class ProjectDefinitionAgent:
         },
     )
 
-    def __init__(self, client: LLMClient, batch_character_limit: int = 18000):
+    def __init__(
+        self,
+        client: LLMClient,
+        batch_character_limit: int = 18000,
+        max_workers: int = 3,
+    ):
+        if batch_character_limit < 1:
+            raise ValueError("batch_character_limit debe ser mayor que cero.")
+        if max_workers < 1:
+            raise ValueError("max_workers debe ser al menos 1.")
         self.client = client
         self.batch_character_limit = batch_character_limit
+        self.max_workers = max_workers
 
     def analyze(
-        self, project_name: str, domain: str, fragments: list[Fragment], maximum_questions: int = 10
+        self,
+        project_name: str,
+        domain: str,
+        fragments: list[Fragment],
+        maximum_questions: int = 10,
+        progress_callback: Callable[[int, str, str], None] | None = None,
     ) -> dict[str, Any]:
         if not fragments:
             raise ValueError("No hay fragmentos para analizar.")
+        progress = progress_callback or (lambda _percent, _message, _step: None)
         batches = self._batches(fragments)
-        summaries = [self._analyze_batch(project_name, domain, batch) for batch in batches]
-        summaries = self._compress_summaries(project_name, domain, summaries)
+        progress(3, f"Corpus dividido en {len(batches)} bloques", "preparing")
+        summaries: list[dict[str, Any] | None] = [None] * len(batches)
+        worker_count = min(self.max_workers, len(batches))
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(self._analyze_batch, project_name, domain, batch): index
+                for index, batch in enumerate(batches)
+            }
+            completed = 0
+            for future in as_completed(futures):
+                index = futures[future]
+                summaries[index] = future.result()
+                completed += 1
+                percent = 5 + round((completed / len(batches)) * 62)
+                progress(
+                    percent,
+                    f"Bloque {completed} de {len(batches)} analizado",
+                    "analyzing_batches",
+                )
+        complete_summaries = [summary for summary in summaries if summary is not None]
+        progress(72, "Consolidando hallazgos y contradicciones", "consolidating")
+        summaries = self._compress_summaries(
+            project_name,
+            domain,
+            complete_summaries,
+            progress_callback=progress,
+        )
         from .llm_schemas import DefinitionAnalysisResponse
 
+        progress(86, "Construyendo la interpretación provisional", "synthesizing")
         payload = self._complete_validated(
             DefinitionAnalysisResponse,
             system_prompt=(
@@ -310,7 +354,9 @@ class ProjectDefinitionAgent:
             ),
             user_prompt=self._synthesis_prompt(project_name, domain, summaries, maximum_questions),
         )
-        return self._normalize_analysis(payload, fragments, maximum_questions, len(batches))
+        result = self._normalize_analysis(payload, fragments, maximum_questions, len(batches))
+        progress(97, "Guardando perfil y preguntas adaptativas", "saving")
+        return result
 
     def _complete_validated(self, schema: type, *, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         validated_completion = getattr(self.client, "complete_json_validated", None)
@@ -369,40 +415,81 @@ Bloque de fuentes:
         return payload
 
     def _compress_summaries(
-        self, project_name: str, domain: str, summaries: list[dict[str, Any]]
+        self,
+        project_name: str,
+        domain: str,
+        summaries: list[dict[str, Any]],
+        progress_callback: Callable[[int, str, str], None] | None = None,
     ) -> list[dict[str, Any]]:
-        while len(json.dumps(summaries, ensure_ascii=False)) > 32000 and len(summaries) > 1:
-            groups: list[list[dict[str, Any]]] = []
-            current: list[dict[str, Any]] = []
-            size = 0
-            for summary in summaries:
-                rendered = json.dumps(summary, ensure_ascii=False)
-                if current and size + len(rendered) > 18000:
-                    groups.append(current)
-                    current, size = [], 0
-                current.append(summary)
-                size += len(rendered)
-            if current:
-                groups.append(current)
-            from .llm_schemas import DefinitionBatchResponse
+        del project_name, domain
+        progress = progress_callback or (lambda _percent, _message, _step: None)
+        progress(76, "Uniendo hallazgos equivalentes y sus citas", "consolidating")
 
-            summaries = [
-                self._complete_validated(
-                    DefinitionBatchResponse,
-                    system_prompt=(
-                        "Fusiona resúmenes de evidencia sin perder citas, ausencias ni contradicciones. "
-                        "No generes requisitos y devuelve exclusivamente JSON válido."
-                    ),
-                    user_prompt=f"""Proyecto: {project_name}
-Dominio: {domain or 'no especificado'}
-Devuelve el mismo esquema de findings y uncertainties. Une duplicados, pero conserva posiciones incompatibles y todos sus identificadores de fuente.
+        # La consolidación es deliberadamente local y determinista. Pedir a un
+        # segundo LLM que resumiera los resúmenes producía salidas extensas que
+        # podían truncarse y dejar JSON inválido. Aquí solo se eliminan duplicados
+        # textuales normalizados y se unen sus citas; el perfil final sigue siendo
+        # construido por el LLM a partir de todos los hallazgos conservados.
+        consolidated: dict[str, list[dict[str, Any]]] = {
+            "findings": [],
+            "uncertainties": [],
+        }
+        indexes: dict[str, dict[tuple[str, str], int]] = {
+            "findings": {},
+            "uncertainties": {},
+        }
+        text_fields = {"findings": "statement", "uncertainties": "description"}
 
-Resúmenes:
-{json.dumps(group, ensure_ascii=False)}""",
-                )
-                for group in groups
-            ]
-        return summaries
+        for summary in summaries:
+            if not isinstance(summary, dict):
+                continue
+            for category, text_field in text_fields.items():
+                records = summary.get(category, [])
+                if not isinstance(records, list):
+                    continue
+                for record in records:
+                    if not isinstance(record, dict):
+                        continue
+                    dimension = str(record.get("dimension", "")).strip()
+                    text = " ".join(str(record.get(text_field, "")).split())
+                    if not dimension or not text:
+                        continue
+                    normalized = " ".join(
+                        re.sub(r"[^a-z0-9áéíóúüñ ]+", " ", text.lower()).split()
+                    )
+                    key = (dimension, normalized)
+                    citations = list(
+                        dict.fromkeys(
+                            str(value).strip()
+                            for value in record.get("source_fragments", [])
+                            if str(value).strip()
+                        )
+                    )
+                    existing_index = indexes[category].get(key)
+                    if existing_index is not None:
+                        existing = consolidated[category][existing_index]
+                        existing["source_fragments"] = list(
+                            dict.fromkeys(existing["source_fragments"] + citations)
+                        )
+                        continue
+                    indexes[category][key] = len(consolidated[category])
+                    consolidated[category].append(
+                        {
+                            "dimension": dimension,
+                            text_field: text,
+                            "source_fragments": citations,
+                        }
+                    )
+
+        progress(
+            84,
+            (
+                f"Consolidados {len(consolidated['findings'])} hallazgos y "
+                f"{len(consolidated['uncertainties'])} incertidumbres"
+            ),
+            "consolidating",
+        )
+        return [consolidated]
 
     def _synthesis_prompt(
         self, project_name: str, domain: str, summaries: list[dict[str, Any]], maximum_questions: int
@@ -414,6 +501,7 @@ Construye un perfil provisional para cada una de estas dimensiones: {', '.join(s
 - Usa únicamente los resúmenes de evidencia.
 - No ocultes contradicciones ni selecciones una alternativa sin confirmación.
 - Usa confianza high cuando varias evidencias claras coinciden, medium cuando la evidencia es parcial, low cuando la interpretación es dudosa y missing cuando no hay información.
+- Sintetiza cada dimension de forma clara y completa, evitando repetir hallazgos equivalentes. Cada value debe ser menor de 12 000 caracteres.
 - Formula hasta {maximum_questions} preguntas solo para información missing o low, contradicciones y decisiones que cambien el comportamiento o la calidad del sistema.
 - No preguntes por un dato que ya esté claro. La persona podrá corregir manualmente el perfil provisional.
 

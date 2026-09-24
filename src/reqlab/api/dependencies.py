@@ -20,7 +20,9 @@ def get_settings() -> Settings:
 
 @lru_cache(maxsize=1)
 def get_repository() -> SQLiteRepository:
-    return SQLiteRepository(get_settings().data_dir / "requirements.db")
+    repository = SQLiteRepository(get_settings().data_dir / "requirements.db")
+    repository.recover_interrupted_runs()
+    return repository
 
 
 @lru_cache(maxsize=1)

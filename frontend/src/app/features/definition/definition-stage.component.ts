@@ -1,9 +1,9 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { ApiService } from '../../core/api.service';
-import { DefinitionQuestion } from '../../core/models';
+import { DefinitionQuestion, GenerationRun } from '../../core/models';
 import { WorkspaceStore } from '../../core/workspace.store';
 import { IconComponent } from '../../shared/icon.component';
 
@@ -43,6 +43,29 @@ import { IconComponent } from '../../shared/icon.component';
               Analizar corpus <app-icon name="arrow" />
             }
           </button>
+          @if (busy()) {
+            <div class="grow" style="width: min(100%, 620px)">
+              <div class="row between gap">
+                <small class="muted">{{ definitionRun()?.parameters?.message || 'Preparando el análisis…' }}</small>
+                <span class="pill purple">{{ definitionProgress() }} %</span>
+              </div>
+              <div
+                class="progress"
+                role="progressbar"
+                aria-label="Progreso del análisis del corpus"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                [attr.aria-valuenow]="definitionProgress()"
+              >
+                <div [style.width.%]="definitionProgress()"></div>
+              </div>
+            </div>
+          }
+          @if (definitionRun()?.status === 'failed') {
+            <div class="alert error">
+              {{ definitionRun()?.error_message || 'No se pudo completar el análisis del corpus.' }}
+            </div>
+          }
         </div>
       } @else {
         <div class="notice gap">
@@ -239,17 +262,23 @@ import { IconComponent } from '../../shared/icon.component';
     }
   `,
 })
-export class DefinitionStageComponent implements OnInit {
+export class DefinitionStageComponent implements OnInit, OnDestroy {
   readonly store = inject(WorkspaceStore);
   private readonly api = inject(ApiService);
   private readonly router = inject(Router);
   readonly busy = signal(false);
   readonly resetWarningOpen = signal(false);
   readonly coverage = signal<{ fragment_count: number; batch_count: number } | null>(null);
+  readonly definitionRun = signal<GenerationRun | null>(null);
+  private timer?: ReturnType<typeof setTimeout>;
   answers: Record<string, string> = {};
 
   ngOnInit(): void {
     this.syncAnswers();
+    void this.resumeDefinitionRun();
+  }
+  ngOnDestroy(): void {
+    if (this.timer) clearTimeout(this.timer);
   }
   coreQuestions(): DefinitionQuestion[] {
     return this.store.questions().filter((item) => item.origin === 'core');
@@ -290,17 +319,57 @@ export class DefinitionStageComponent implements OnInit {
     const project = this.store.project();
     if (!project) return;
     this.busy.set(true);
+    this.store.clearError();
     try {
       const result = await firstValueFrom(this.api.analyzeDefinition(project.id));
-      this.store.questions.set(result.questions);
-      this.coverage.set(result.analysis.coverage);
-      this.answers = {};
-      this.syncAnswers();
-      await this.store.refreshProject();
-      this.syncAnswers();
+      await this.pollDefinition(result.run_id);
     } catch (error) {
       this.store.setError(this.store.message(error));
-    } finally {
+      this.busy.set(false);
+    }
+  }
+  definitionProgress(): number {
+    return this.definitionRun()?.parameters?.progress ?? 0;
+  }
+  private async resumeDefinitionRun(): Promise<void> {
+    const project = this.store.project();
+    if (!project || this.hasAnalysis()) return;
+    try {
+      const result = await firstValueFrom(this.api.latestDefinitionRun(project.id));
+      this.definitionRun.set(result.run);
+      if (result.run?.status === 'running') {
+        this.busy.set(true);
+        await this.pollDefinition(result.run.id);
+      }
+    } catch {
+      // La consulta de reanudación no bloquea el uso normal de la etapa.
+    }
+  }
+  private async pollDefinition(runId: string): Promise<void> {
+    try {
+      const run = await firstValueFrom(this.api.getRun(runId));
+      this.definitionRun.set(run);
+      if (run.status === 'completed') {
+        this.busy.set(false);
+        this.coverage.set(
+          run.parameters.metrics?.coverage ?? {
+            fragment_count: this.store.project()?.fragment_count ?? 0,
+            batch_count: 0,
+          },
+        );
+        this.answers = {};
+        await this.store.refreshProject();
+        this.syncAnswers();
+        return;
+      }
+      if (run.status === 'failed') {
+        this.busy.set(false);
+        this.store.setError(run.error_message || 'No se pudo completar el análisis del corpus.');
+        return;
+      }
+      this.timer = setTimeout(() => void this.pollDefinition(runId), 1200);
+    } catch (error) {
+      this.store.setError(this.store.message(error));
       this.busy.set(false);
     }
   }

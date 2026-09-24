@@ -37,6 +37,9 @@ class Settings:
     llm_max_retries: int
     llm_thinking_enabled: bool
     llm_max_tokens: int
+    definition_batch_character_limit: int
+    definition_max_workers: int
+    definition_max_questions: int
     embedding_model: str
     embedding_query_prefix: str
     embedding_passage_prefix: str
@@ -58,6 +61,12 @@ class Settings:
             raise ValueError("LLM_MAX_RETRIES debe ser al menos 1.")
         if self.llm_max_tokens < 1:
             raise ValueError("LLM_MAX_TOKENS debe ser al menos 1.")
+        if self.definition_batch_character_limit < 3000:
+            raise ValueError("DEFINITION_BATCH_CHARACTER_LIMIT debe ser al menos 3000.")
+        if self.definition_max_workers < 1:
+            raise ValueError("DEFINITION_MAX_WORKERS debe ser al menos 1.")
+        if self.definition_max_questions < 1:
+            raise ValueError("DEFINITION_MAX_QUESTIONS debe ser al menos 1.")
         if self.retrieval_top_k < 1:
             raise ValueError("RETRIEVAL_TOP_K debe ser mayor que cero.")
         if self.chunk_size < 300:
@@ -95,6 +104,11 @@ class Settings:
                 "semantic_weight": self.rrf_semantic_weight,
             },
             "segmentation": {"chunk_size": self.chunk_size, "overlap": self.chunk_overlap},
+            "definition": {
+                "batch_character_limit": self.definition_batch_character_limit,
+                "max_workers": self.definition_max_workers,
+                "max_questions": self.definition_max_questions,
+            },
             "validation": {
                 "duplicate_threshold": self.duplicate_threshold,
                 "cross_type_duplicate_threshold": self.cross_type_duplicate_threshold,
@@ -136,6 +150,11 @@ class Settings:
             llm_max_retries=_env_int("LLM_MAX_RETRIES", 3),
             llm_thinking_enabled=_env_bool("LLM_THINKING_ENABLED", False),
             llm_max_tokens=_env_int("LLM_MAX_TOKENS", 12000),
+            definition_batch_character_limit=_env_int(
+                "DEFINITION_BATCH_CHARACTER_LIMIT", 18000
+            ),
+            definition_max_workers=_env_int("DEFINITION_MAX_WORKERS", 3),
+            definition_max_questions=_env_int("DEFINITION_MAX_QUESTIONS", 10),
             embedding_model=embedding_model,
             embedding_query_prefix=query_prefix,
             embedding_passage_prefix=passage_prefix,
