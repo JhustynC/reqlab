@@ -56,10 +56,19 @@ class DeepSeekGenerationAgent:
             "artifact_id": f"{artifact_type}-001",
             "title": "título breve",
             "description": "texto del requisito o historia",
-            "priority": "Alta|Media|Baja",
+            "priority": "Alta|Media|Baja|No definida",
+            "priority_source": "corpus|no_definida",
             "source_fragments": ["SRC-01-F02"],
             "status": "propuesto|requiere aclaración",
             "acceptance_criteria": ["solo obligatorio en HU"],
+            "verification_criteria": ["obligatorio en RF y RNF"],
+            "ears_pattern": "patrón EARS para RF; No aplica para HU",
+            "quality_category": "solo RNF",
+            "metric": "solo RNF; vacío si no existe en la fuente",
+            "unit": "solo RNF; vacío si no existe en la fuente",
+            "target": "solo RNF; vacío si no existe en la fuente",
+            "verification_method": "solo RNF",
+            "rationale": "justificación breve sustentada",
         }
         return f"""Eres el agente generador de requisitos para el sistema '{self.system_name}', cuyo dominio es '{self.domain}'. Genera como máximo {limit} {TASKS[artifact_type]}.
 
@@ -68,7 +77,11 @@ Reglas obligatorias:
 2. Cada elemento debe incluir uno o más source_fragments con IDs exactos del contexto.
 3. Si una regla es contradictoria o incompleta, usa status 'requiere aclaración' y describe la incertidumbre sin resolverla.
 4. No repitas requisitos equivalentes ni introduzcas alcance que no aparezca en el corpus.
-5. Devuelve SOLO un objeto JSON válido con esta forma: {{"artifacts": [ ... ]}}. No uses Markdown ni explicación.
+5. Usa EARS para los RF: '<nombre del sistema> deberá...', o 'Cuando/Mientras/Si..., <nombre del sistema> deberá...'. No inventes condiciones.
+6. No asignes prioridad por defecto: usa 'No definida' y priority_source 'no_definida' si la fuente no la establece explícitamente.
+7. RF y RNF deben incluir criterios de verificación. En RNF no inventes métrica, unidad ni umbral.
+8. No conviertas definiciones, hechos del dominio o supuestos en requisitos salvo que impongan comportamiento o restricciones al sistema.
+9. Devuelve SOLO un objeto JSON válido con esta forma: {{"artifacts": [ ... ]}}. No uses Markdown ni explicación.
 
 Esquema de cada elemento: {json.dumps(schema, ensure_ascii=False)}
 

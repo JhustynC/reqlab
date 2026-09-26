@@ -47,6 +47,37 @@ class PrototypeTests(unittest.TestCase):
         report = TraceabilityConsistencyAgent().validate([artifact], self.fragments, registry)
         self.assertEqual("CASE-AMB-01", report["ambiguities_detected"][0]["id"])
 
+    def test_missing_priority_is_not_silently_converted_to_medium(self):
+        artifact = Artifact.from_dict(
+            {
+                "title": "Registrar solicitud",
+                "description": "El sistema deberá registrar una solicitud.",
+                "source_fragments": ["SRC-03-F01"],
+            },
+            "RF",
+            1,
+        )
+
+        self.assertEqual("No definida", artifact.priority)
+        self.assertEqual("no_definida", artifact.priority_source)
+
+    def test_validation_reports_ears_verification_and_rnf_measurement_gaps(self):
+        rf = Artifact(
+            "RF-001", "RF", "Registrar", "Registrar una solicitud.",
+            "No definida", ["SRC-03-F01"], ears_pattern="Ubicuo",
+        )
+        rnf = Artifact(
+            "RNF-001", "RNF", "Rendimiento", "El sistema deberá responder oportunamente.",
+            "No definida", ["SRC-03-F01"], verification_criteria=["Medir el tiempo de respuesta."],
+            ears_pattern="No aplica", quality_category="Eficiencia de desempeño",
+        )
+
+        report = TraceabilityConsistencyAgent().validate([rf, rnf], self.fragments)
+
+        self.assertEqual(["RF-001"], report["requirements_with_invalid_ears"])
+        self.assertEqual(["RF-001"], report["requirements_without_verification_criteria"])
+        self.assertEqual("RNF-001", report["non_functional_measurement_pending"][0]["artifact_id"])
+
     def test_generation_prompt_uses_manifest_metadata_not_a_fixed_domain(self):
         generator = DeepSeekGenerationAgent(
             TfidfRetrievalAgent(self.fragments),

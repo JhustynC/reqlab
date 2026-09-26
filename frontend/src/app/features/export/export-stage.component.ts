@@ -27,5 +27,5 @@ export class ExportStageComponent {
   readonly format = signal<'json' | 'docx'>('docx');
   approvedCount(): number { return this.store.artifacts().filter((item) => item.status === 'aceptado').length; }
   allApproved(): boolean { return this.store.artifacts().length > 0 && this.approvedCount() === this.store.artifacts().length; }
-  alertCount(): number { const report = this.store.validation(); return (report?.artifacts_without_citations.length ?? 0) + Object.values(report?.invalid_citations ?? {}).reduce((sum, items) => sum + items.length, 0) + (report?.possible_duplicates.length ?? 0) + (report?.taxonomy_warnings.length ?? 0); }
+  alertCount(): number { const report = this.store.validation(); return (report?.artifacts_without_citations.length ?? 0) + Object.values(report?.invalid_citations ?? {}).reduce((sum, items) => sum + items.length, 0) + (report?.possible_duplicates.length ?? 0) + (report?.taxonomy_warnings.length ?? 0) + (report?.requirements_without_verification_criteria?.length ?? 0) + (report?.requirements_with_invalid_ears?.length ?? 0) + (report?.non_functional_measurement_pending?.length ?? 0) + (report?.undefined_priorities?.length ?? 0) + (report?.priorities_without_source?.length ?? 0); }
 }

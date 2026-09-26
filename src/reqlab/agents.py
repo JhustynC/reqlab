@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -33,7 +34,9 @@ CONTRACTS = {
         "RF",
         "Identificar capacidades y comportamientos observables que el sistema debe proporcionar.",
         (
-            "Redactar cada requisito con sujeto y comportamiento verificable.",
+            "Redactar cada requisito con un patrón EARS adecuado y un comportamiento verificable.",
+            "Usar '<nombre del sistema> deberá...' o incorporar explícitamente el evento, estado o situación adversa sustentada por la evidencia.",
+            "Proponer al menos un criterio de verificación observable sin inventar datos.",
             "Separar capacidades distintas y evitar decisiones de diseño no sustentadas.",
             "No clasificar atributos de calidad como funciones.",
         ),
@@ -50,7 +53,9 @@ CONTRACTS = {
         (
             "No convertir funciones del negocio en requisitos no funcionales.",
             "Conservar las métricas explícitas de las fuentes; no inventar umbrales.",
-            "Marcar como pendiente cualquier atributo que no pueda verificarse con la información disponible.",
+            "Identificar categoría de calidad, métrica, unidad, umbral y método de verificación cuando la evidencia los permita.",
+            "Marcar como pendiente y dejar vacíos los datos que no puedan verificarse con la información disponible.",
+            "Aplicar EARS solo cuando el RNF describa una respuesta condicionada; en otro caso usar 'No aplica'.",
         ),
         retrieval_query=(
             "rendimiento tiempo respuesta disponibilidad seguridad autenticación "
@@ -64,7 +69,7 @@ CONTRACTS = {
         "Expresar necesidades de los actores con valor observable y criterios de aceptación.",
         (
             "Usar el patrón Como [rol], quiero [objetivo], para [beneficio].",
-            "Añadir criterios de aceptación concretos y trazables.",
+            "Añadir criterios de aceptación concretos y trazables, preferentemente como Dado-Cuando-Entonces.",
             "No inventar actores ni beneficios ausentes de las fuentes o de la definición confirmada.",
         ),
         retrieval_query=(
@@ -170,13 +175,30 @@ class SpecializedGenerationAgent:
             "artifact_id": f"{self.contract.artifact_type}-001",
             "title": "Título breve",
             "description": "Enunciado completo",
-            "priority": "Alta|Media|Baja",
+            "priority": "Alta|Media|Baja|No definida",
+            "priority_source": "corpus|no_definida",
             "source_fragments": [allowed_citations[0]],
             "status": "propuesto|requiere aclaración",
             "acceptance_criteria": (
                 ["Criterio verificable"] if self.contract.artifact_type == "HU" else []
             ),
             "related_artifacts": allowed_relations[:1],
+            "verification_criteria": (
+                ["Forma observable de comprobar el cumplimiento"]
+                if self.contract.artifact_type in {"RF", "RNF"}
+                else []
+            ),
+            "ears_pattern": (
+                "Ubicuo|Basado en evento|Basado en estado|Comportamiento no deseado|Característica opcional|Complejo"
+                if self.contract.artifact_type == "RF"
+                else "No aplica"
+            ),
+            "quality_category": "solo RNF; vacío para RF/HU",
+            "metric": "solo RNF; vacío si no consta en la evidencia",
+            "unit": "solo RNF; vacío si no consta en la evidencia",
+            "target": "solo RNF; vacío si no consta en la evidencia",
+            "verification_method": "solo RNF; vacío si no consta en la evidencia",
+            "rationale": "justificación breve basada en la evidencia; vacío si no se puede sustentar",
         }
         rules = "\n".join(f"- {rule}" for rule in self.contract.quality_rules)
 
@@ -227,6 +249,11 @@ Reglas comunes:
 - related_artifacts solo puede contener identificadores RF/RNF/HU mostrados en la sección de coherencia.
 - Si falta información, conserva la incertidumbre y usa el estado 'requiere aclaración'.
 - No resuelvas contradicciones mediante suposiciones.
+- No conviertas definiciones, hechos del dominio o supuestos en requisitos salvo que impongan un comportamiento o restricción al sistema.
+- Usa prioridad 'No definida' y priority_source 'no_definida' salvo que una fuente establezca explícitamente la prioridad. Si la establece, usa priority_source 'corpus'.
+- Para RF y RNF incluye verification_criteria. Si falta un dato cuantitativo, el criterio puede indicar qué deberá medirse sin inventar el umbral.
+- EARS controla la redacción, pero no autoriza completar precondiciones, eventos ni respuestas ausentes de las fuentes.
+- Para HU usa ears_pattern 'No aplica'; para RNF úsalo solo cuando corresponda.
 - Devuelve {{"artifacts": [...]}} usando este esquema: {json.dumps(schema, ensure_ascii=False)}
 {coherence_section}
 Evidencia recuperada:
@@ -318,6 +345,8 @@ class ProjectDefinitionAgent:
         fragments: list[Fragment],
         maximum_questions: int = 10,
         progress_callback: Callable[[int, str, str], None] | None = None,
+        existing_batch_summaries: dict[str, dict[str, Any]] | None = None,
+        batch_result_callback: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         if not fragments:
             raise ValueError("No hay fragmentos para analizar.")
@@ -326,23 +355,50 @@ class ProjectDefinitionAgent:
         batches = self._batches(fragments)
         progress(3, f"Corpus dividido en {len(batches)} bloques", "preparing")
         summaries: list[dict[str, Any] | None] = [None] * len(batches)
-        worker_count = min(self.max_workers, len(batches))
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {
-                executor.submit(copy_context().run, self._analyze_batch, project_name, domain, batch): index
-                for index, batch in enumerate(batches)
-            }
-            completed = 0
-            for future in as_completed(futures):
-                index = futures[future]
-                summaries[index] = future.result()
+        cached = existing_batch_summaries or {}
+        pending: list[tuple[int, list[Fragment], str]] = []
+        completed = 0
+        for index, batch in enumerate(batches):
+            signature = self._batch_signature(batch)
+            if signature in cached:
+                summaries[index] = cached[signature]
                 completed += 1
-                percent = 5 + round((completed / len(batches)) * 62)
-                progress(
-                    percent,
-                    f"Bloque {completed} de {len(batches)} analizado",
-                    "analyzing_batches",
-                )
+                if batch_result_callback:
+                    batch_result_callback(signature, cached[signature])
+            else:
+                pending.append((index, batch, signature))
+        if completed:
+            progress(
+                5 + round((completed / len(batches)) * 62),
+                f"Reutilizados {completed} de {len(batches)} bloques ya analizados",
+                "resuming_batches",
+            )
+        if pending:
+            worker_count = min(self.max_workers, len(pending))
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = {
+                    executor.submit(
+                        copy_context().run,
+                        self._analyze_batch,
+                        project_name,
+                        domain,
+                        batch,
+                    ): (index, signature)
+                    for index, batch, signature in pending
+                }
+                for future in as_completed(futures):
+                    index, signature = futures[future]
+                    summary = future.result()
+                    summaries[index] = summary
+                    if batch_result_callback:
+                        batch_result_callback(signature, summary)
+                    completed += 1
+                    percent = 5 + round((completed / len(batches)) * 62)
+                    progress(
+                        percent,
+                        f"Bloque {completed} de {len(batches)} analizado",
+                        "analyzing_batches",
+                    )
         complete_summaries = [summary for summary in summaries if summary is not None]
         progress(72, "Consolidando hallazgos y contradicciones", "consolidating")
         summaries = self._compress_summaries(
@@ -366,6 +422,19 @@ class ProjectDefinitionAgent:
         result = self._normalize_analysis(payload, fragments, maximum_questions, len(batches))
         progress(97, "Guardando perfil y preguntas adaptativas", "saving")
         return result
+
+    @staticmethod
+    def _batch_signature(fragments: list[Fragment]) -> str:
+        payload = [
+            {
+                "id": fragment.fragment_id,
+                "heading": fragment.heading,
+                "text": fragment.text,
+            }
+            for fragment in fragments
+        ]
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
     def _complete_validated(self, schema: type, *, system_prompt: str, user_prompt: str) -> dict[str, Any]:
         try:
@@ -650,21 +719,29 @@ class RevisionAgent:
             "valid_relations": artifact.get("related_artifacts", []),
         }
         validated_completion = getattr(self.client, "complete_json_validated", None)
+        editable_fields = (
+            "artifact_key", "artifact_type", "title", "description", "priority",
+            "priority_source", "source_fragments", "status", "acceptance_criteria",
+            "related_artifacts", "verification_criteria", "ears_pattern",
+            "quality_category", "metric", "unit", "target", "verification_method",
+            "rationale",
+        )
+        current_payload = {key: artifact.get(key) for key in editable_fields}
         common = {
             "system_prompt": (
                 "Eres un revisor de requisitos. Propón cambios sustentados, conserva el tipo y el identificador, "
                 "y devuelve exclusivamente JSON válido."
             ),
             "user_prompt": f"""Artefacto vigente:
-{json.dumps({key: artifact[key] for key in ('artifact_key', 'artifact_type', 'title', 'description', 'priority', 'source_fragments', 'status', 'acceptance_criteria', 'related_artifacts')}, ensure_ascii=False)}
+{json.dumps(current_payload, ensure_ascii=False)}
 
 Solicitud del usuario: {instruction}
 
 Evidencia disponible:
 {context}
 
-Devuelve {{"artifact": {{"artifact_id": "{artifact['artifact_key']}", "title": "...", "description": "...", "priority": "Alta|Media|Baja", "source_fragments": ["..."], "status": "propuesto|requiere aclaración", "acceptance_criteria": ["..."], "related_artifacts": []}}}}.
-No introduzcas información que no esté en la evidencia.""",
+Devuelve {{"artifact": {{"artifact_id": "{artifact['artifact_key']}", "title": "...", "description": "...", "priority": "Alta|Media|Baja|No definida", "priority_source": "corpus|no_definida", "source_fragments": ["..."], "status": "propuesto|requiere aclaración", "acceptance_criteria": ["..."], "related_artifacts": [], "verification_criteria": ["..."], "ears_pattern": "...", "quality_category": "", "metric": "", "unit": "", "target": "", "verification_method": "", "rationale": ""}}}}.
+Conserva los campos que la solicitud no necesite modificar. No introduzcas información que no esté en la evidencia. Una prioridad solo puede ser Alta, Media o Baja si aparece explícitamente en la evidencia; de lo contrario usa No definida.""",
         }
         if callable(validated_completion):
             response = validated_completion(

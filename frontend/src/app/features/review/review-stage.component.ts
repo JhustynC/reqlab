@@ -2,7 +2,7 @@ import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angula
 import { ActivatedRoute, Router } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { firstValueFrom } from 'rxjs';
-import { Artifact } from '../../core/models';
+import { Artifact, ArtifactType, JevRerankingAudit } from '../../core/models';
 import { ApiService } from '../../core/api.service';
 import { WorkspaceStore } from '../../core/workspace.store';
 import { IconComponent } from '../../shared/icon.component';
@@ -88,6 +88,15 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
             </div>
             <h3>{{ artifact.title }}</h3>
             <p>{{ artifact.description }}</p>
+            @if (artifact.artifact_type !== 'HU') {
+              <div class="artifact-meta-line">
+                <small>Patrón: {{ artifact.ears_pattern }}</small>
+                <small> · {{ artifact.verification_criteria.length }} criterio(s) de verificación</small>
+              </div>
+            }
+            @if (artifact.artifact_type === 'RNF') {
+              <div class="artifact-meta-line"><small>{{ artifact.quality_category || 'Categoría pendiente' }} · {{ artifact.metric || 'Métrica pendiente' }} · {{ artifact.target || 'Umbral pendiente' }}</small></div>
+            }
             @if (artifact.validation?.status === 'requiere_revision') {
               <div class="artifact-warning">
                 <app-icon name="warning" /> Requiere revisión automática
@@ -290,6 +299,36 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
             </p>
           </article>
         }
+        @if ((store.validation()?.requirements_without_verification_criteria?.length ?? 0) > 0) {
+          <article class="alert-card">
+            <span class="pill amber">Verificabilidad</span>
+            <h3>Requisitos sin criterio de verificación</h3>
+            <p>{{ (store.validation()?.requirements_without_verification_criteria ?? []).join(', ') }}</p>
+          </article>
+        }
+        @if ((store.validation()?.requirements_with_invalid_ears?.length ?? 0) > 0) {
+          <article class="alert-card">
+            <span class="pill amber">EARS</span>
+            <h3>Patrón de redacción inconsistente</h3>
+            <p>{{ (store.validation()?.requirements_with_invalid_ears ?? []).join(', ') }}</p>
+          </article>
+        }
+        @if ((store.validation()?.non_functional_measurement_pending?.length ?? 0) > 0) {
+          <article class="alert-card">
+            <span class="pill amber">Medición RNF</span>
+            <h3>Datos de medición pendientes</h3>
+            @for (item of store.validation()?.non_functional_measurement_pending ?? []; track item.artifact_id) {
+              <p><button class="artifact-id" type="button" (click)="reviewArtifact(item.artifact_id)">{{ item.artifact_id }}</button>: {{ item.missing_fields.join(', ') }}</p>
+            }
+          </article>
+        }
+        @if ((store.validation()?.undefined_priorities?.length ?? 0) > 0) {
+          <article class="alert-card">
+            <span class="pill amber">Priorización humana</span>
+            <h3>Prioridades pendientes</h3>
+            <p>{{ (store.validation()?.undefined_priorities ?? []).join(', ') }}</p>
+          </article>
+        }
         @if ((store.validation()?.cross_type_duplicates?.length ?? 0) > 0) {
           <article class="alert-card">
             <span class="pill amber">Relación entre tipos</span>
@@ -357,6 +396,12 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
             </div>
           </div>
           <div class="run-summary gap">
+            @for (type of artifactTypes; track type) {
+              <div>
+                <small>{{ type }} · generado / máximo</small>
+                <strong>{{ generatedCount(type) }} / {{ requestedCount(type) }}</strong>
+              </div>
+            }
             <div>
               <small>Modelo LLM</small
               ><strong>{{
@@ -410,6 +455,49 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
               }
             </div>
           </div>
+          @if (run.parameters.experimental_config?.reranker?.provider === 'jev' && run.parameters.experimental_config?.reranker?.enabled) {
+            <article class="alert-card gap">
+              <span class="pill purple">Auditoría Jev</span>
+              <h3>Recorrido completo del reranking</h3>
+              <p class="stage-desc">Se conservan todos los candidatos recibidos desde RRF, sus dos probabilidades, el promedio utilizado, la posición final y las solicitudes realizadas. Estos valores documentan el proceso; no prueban por sí solos mayor calidad.</p>
+              @for (type of artifactTypes; track type) {
+                @if (jevAudit(type); as audit) {
+                  @if (audit.candidates?.length) {
+                    <details class="jev-audit">
+                      <summary><strong>{{ type }}</strong> · {{ audit.candidate_count }} candidatos · {{ audit.selected_count }} seleccionados · {{ audit.requests || 0 }} solicitudes</summary>
+                      <div class="run-summary">
+                        <div><small>Modelo solicitado</small><strong>{{ audit.requested_model || '—' }}</strong></div>
+                        <div><small>Modelo servido</small><strong>{{ audit.served_models?.join(', ') || 'No informado' }}</strong></div>
+                        <div><small>Tokens</small><strong>{{ formatTokens(audit.total_tokens) }}</strong></div>
+                        <div><small>Costo reportado</small><strong>{{ formatCost(audit.cost) }}</strong></div>
+                        <div><small>Latencia</small><strong>{{ formatLatency(audit.latency_ms) }}</strong></div>
+                        <div><small>Fórmula</small><strong>{{ audit.score_formula || '—' }}</strong></div>
+                      </div>
+                      <div class="table-wrap">
+                        <table>
+                          <thead><tr><th>Fragmento</th><th>RRF</th><th>Relevancia</th><th>Evidencia</th><th>Jev</th><th>Posición final</th></tr></thead>
+                          <tbody>
+                            @for (candidate of audit.candidates || []; track candidate.fragment_id) {
+                              <tr [class.audit-selected]="candidate.selected">
+                                <td>{{ candidate.fragment_id }} @if (candidate.selected) { <span class="pill green">Seleccionado</span> }</td>
+                                <td>#{{ candidate.original_rrf_rank }} · {{ formatScore(candidate.original_rrf_score) }}</td>
+                                <td>{{ formatScore(candidate.topical_relevance) }}</td>
+                                <td>{{ formatScore(candidate.useful_evidence) }}</td>
+                                <td>{{ formatScore(candidate.combined_score) }}</td>
+                                <td>#{{ candidate.final_rank }}</td>
+                              </tr>
+                            }
+                          </tbody>
+                        </table>
+                      </div>
+                    </details>
+                  } @else {
+                    <div class="notice amber gap"><app-icon name="warning" /><div><strong>{{ type }} · ejecución histórica</strong><br>Registró {{ audit.requests || 0 }} solicitudes y {{ formatTokens(audit.total_tokens) }} tokens, pero fue creada antes del desglose por candidato.</div></div>
+                  }
+                }
+              }
+            </article>
+          }
           <p class="stage-desc">
             Estos datos documentan cómo se produjo esta salida; no sustituyen la evaluación de
             calidad por expertos.
@@ -472,10 +560,12 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
         </section>
       </div>
     }
+
   `,
 })
 export class ReviewStageComponent implements OnInit {
   readonly store = inject(WorkspaceStore);
+  readonly artifactTypes: ArtifactType[] = ['RF', 'RNF', 'HU'];
   private readonly api = inject(ApiService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
@@ -589,7 +679,12 @@ export class ReviewStageComponent implements OnInit {
       this.invalidRelations().length +
       (report?.user_stories_with_invalid_format?.length ?? 0) +
       (report?.user_stories_without_acceptance_criteria?.length ?? 0) +
-      (report?.taxonomy_warnings.length ?? 0)
+      (report?.taxonomy_warnings.length ?? 0) +
+      (report?.requirements_without_verification_criteria?.length ?? 0) +
+      (report?.requirements_with_invalid_ears?.length ?? 0) +
+      (report?.non_functional_measurement_pending?.length ?? 0) +
+      (report?.undefined_priorities?.length ?? 0) +
+      (report?.priorities_without_source?.length ?? 0)
     );
   }
   statusLabel(status: Artifact['status']): string {
@@ -621,6 +716,23 @@ export class ReviewStageComponent implements OnInit {
   }
   formatTokens(value?: number): string {
     return value == null ? '—' : value.toLocaleString('es-EC');
+  }
+  generatedCount(type: ArtifactType): number {
+    return this.store.run()?.parameters.metrics?.generated_counts?.[type] ?? this.store.counts()[type];
+  }
+  requestedCount(type: ArtifactType): number {
+    return this.store.run()?.parameters.metrics?.generation_limits?.[type]
+      ?? this.store.run()?.parameters.generation_limits?.[type]
+      ?? 0;
+  }
+  jevAudit(type: ArtifactType): JevRerankingAudit | undefined {
+    return this.store.run()?.parameters.metrics?.agents?.[type]?.jev;
+  }
+  formatScore(value?: number): string {
+    return value == null ? '—' : value.toFixed(3);
+  }
+  formatCost(value?: number | null): string {
+    return value == null ? 'No informado' : `$${value.toFixed(6)}`;
   }
   openExport(): void {
     const project = this.store.project();

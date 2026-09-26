@@ -120,11 +120,28 @@ export interface Artifact {
   artifact_type: ArtifactType;
   title: string;
   description: string;
-  priority: 'Alta' | 'Media' | 'Baja';
+  priority: 'Alta' | 'Media' | 'Baja' | 'No definida';
+  priority_source: 'corpus' | 'usuario' | 'legado' | 'no_definida';
   source_fragments: string[];
   status: 'propuesto' | 'requiere aclaración' | 'aceptado' | 'rechazado';
   acceptance_criteria: string[];
   related_artifacts: string[];
+  verification_criteria: string[];
+  ears_pattern:
+    | 'Ubicuo'
+    | 'Basado en evento'
+    | 'Basado en estado'
+    | 'Comportamiento no deseado'
+    | 'Característica opcional'
+    | 'Complejo'
+    | 'No aplica'
+    | 'No determinado';
+  quality_category: string;
+  metric: string;
+  unit: string;
+  target: string;
+  verification_method: string;
+  rationale: string;
   validation: {
     status?: 'sin_alertas' | 'requiere_revision';
     warnings?: string[];
@@ -132,6 +149,48 @@ export interface Artifact {
   version: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface JevCandidateAudit {
+  fragment_id: string;
+  original_rrf_rank: number;
+  original_rrf_score: number;
+  topical_relevance: number;
+  useful_evidence: number;
+  combined_score: number;
+  final_rank: number;
+  selected: boolean;
+}
+
+export interface JevRequestAudit {
+  batch: number;
+  candidate_ids: string[];
+  request_id?: string | null;
+  requested_model: string;
+  served_model?: string | null;
+  provider?: string | null;
+  attempts: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost?: number | null;
+  latency_ms: number;
+}
+
+export interface JevRerankingAudit {
+  status?: 'completed' | 'failed';
+  requested_model?: string;
+  served_models?: string[];
+  requests?: number;
+  candidate_count?: number;
+  selected_count?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  cost?: number | null;
+  latency_ms?: number;
+  score_formula?: string;
+  request_audit?: JevRequestAudit[];
+  candidates?: JevCandidateAudit[];
 }
 
 export interface GenerationRun {
@@ -168,6 +227,15 @@ export interface GenerationRun {
       total_tokens?: number;
       total_attempts?: number;
       coverage?: { fragment_count: number; batch_count: number };
+      generated_counts?: GenerationLimits;
+      generation_limits?: GenerationLimits;
+      completed_types?: ArtifactType[];
+      resumed_from_run_id?: string | null;
+      resumable?: boolean;
+      agents?: Partial<Record<ArtifactType, {
+        reused?: boolean;
+        jev?: JevRerankingAudit;
+      }>>;
     };
   };
 }
@@ -197,11 +265,20 @@ export interface RevisionProposal {
     artifact_type: ArtifactType;
     title: string;
     description: string;
-    priority: 'Alta' | 'Media' | 'Baja';
+    priority: 'Alta' | 'Media' | 'Baja' | 'No definida';
+    priority_source: 'corpus' | 'usuario' | 'legado' | 'no_definida';
     source_fragments: string[];
     status: string;
     acceptance_criteria: string[];
     related_artifacts: string[];
+    verification_criteria: string[];
+    ears_pattern: Artifact['ears_pattern'];
+    quality_category: string;
+    metric: string;
+    unit: string;
+    target: string;
+    verification_method: string;
+    rationale: string;
   };
 }
 
@@ -221,6 +298,11 @@ export interface ValidationReport {
   invalid_relations: Record<string, string[]>;
   user_stories_with_invalid_format: string[];
   user_stories_without_acceptance_criteria: string[];
+  requirements_without_verification_criteria: string[];
+  requirements_with_invalid_ears: string[];
+  non_functional_measurement_pending: Array<{ artifact_id: string; missing_fields: string[] }>;
+  undefined_priorities: string[];
+  priorities_without_source: string[];
   taxonomy_warnings: Array<{ artifact_id: string; reason: string }>;
   artifact_validations: Record<string, { status: string; warnings: string[] }>;
   thresholds: { same_type_jaccard: number; cross_type_jaccard: number };

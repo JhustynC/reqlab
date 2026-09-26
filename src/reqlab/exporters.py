@@ -53,6 +53,8 @@ def build_docx(payload: dict[str, Any]) -> bytes:
             metadata = document.add_paragraph()
             metadata.add_run("Prioridad: ").bold = True
             metadata.add_run(f"{item['priority']}   ")
+            metadata.add_run("Procedencia de prioridad: ").bold = True
+            metadata.add_run(f"{_priority_source_label(item.get('priority_source'))}   ")
             metadata.add_run("Estado: ").bold = True
             metadata.add_run(f"{item['status']}   ")
             metadata.add_run("Versión: ").bold = True
@@ -64,6 +66,32 @@ def build_docx(payload: dict[str, Any]) -> bytes:
                 relations = document.add_paragraph()
                 relations.add_run("Artefactos relacionados: ").bold = True
                 relations.add_run(", ".join(item["related_artifacts"]))
+            if item.get("rationale"):
+                rationale = document.add_paragraph()
+                rationale.add_run("Justificación: ").bold = True
+                rationale.add_run(str(item["rationale"]))
+            if artifact_type in {"RF", "RNF"}:
+                pattern = document.add_paragraph()
+                pattern.add_run("Patrón de redacción: ").bold = True
+                pattern.add_run(str(item.get("ears_pattern") or "No determinado"))
+                document.add_paragraph("Criterios de verificación:")
+                for criterion in item.get("verification_criteria") or []:
+                    document.add_paragraph(str(criterion), style="List Bullet")
+                if not item.get("verification_criteria"):
+                    document.add_paragraph("Pendiente de definición.")
+            if artifact_type == "RNF":
+                details = document.add_table(rows=0, cols=2)
+                details.style = "Table Grid"
+                for label, key in (
+                    ("Categoría de calidad", "quality_category"),
+                    ("Métrica", "metric"),
+                    ("Unidad", "unit"),
+                    ("Umbral o valor objetivo", "target"),
+                    ("Método de verificación", "verification_method"),
+                ):
+                    cells = details.add_row().cells
+                    cells[0].text = label
+                    cells[1].text = str(item.get(key) or "Pendiente de definición")
             warnings = (item.get("validation") or {}).get("warnings", [])
             if warnings:
                 document.add_paragraph("Observaciones automáticas:")
@@ -73,6 +101,28 @@ def build_docx(payload: dict[str, Any]) -> bytes:
                 document.add_paragraph("Criterios de aceptación:")
                 for criterion in item["acceptance_criteria"]:
                     document.add_paragraph(str(criterion), style="List Bullet")
+
+    fragments = {item["fragment_id"]: item for item in payload.get("fragments", [])}
+    document.add_heading("Matriz de trazabilidad", level=1)
+    matrix = document.add_table(rows=1, cols=6)
+    matrix.style = "Table Grid"
+    for cell, label in zip(
+        matrix.rows[0].cells,
+        ("Artefacto", "Tipo", "Fragmento", "Fuente", "Extracto de evidencia", "Estado"),
+    ):
+        cell.text = label
+    for item in payload.get("artifacts", []):
+        citations = item.get("source_fragments") or [""]
+        for citation in citations:
+            evidence = fragments.get(citation, {})
+            cells = matrix.add_row().cells
+            cells[0].text = str(item["artifact_key"])
+            cells[1].text = str(item["artifact_type"])
+            cells[2].text = str(citation or "Sin cita")
+            cells[3].text = str(evidence.get("source_file") or "No disponible")
+            excerpt = " ".join(str(evidence.get("text") or "").split())
+            cells[4].text = excerpt[:280] + ("…" if len(excerpt) > 280 else "")
+            cells[5].text = str(item["status"])
 
     document.add_heading("Resumen de validación automática", level=1)
     validation = payload.get("validation") or {}
@@ -105,3 +155,12 @@ def build_docx(payload: dict[str, Any]) -> bytes:
     output = io.BytesIO()
     document.save(output)
     return output.getvalue()
+
+
+def _priority_source_label(value: Any) -> str:
+    return {
+        "corpus": "Corpus",
+        "usuario": "Decisión del usuario",
+        "no_definida": "No definida",
+        "legado": "Registro anterior sin procedencia",
+    }.get(str(value or ""), "No registrada")

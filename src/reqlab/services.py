@@ -210,6 +210,8 @@ class ProjectApplicationService:
         self,
         project_id: str,
         progress_callback: Callable[[int, str, str], None] | None = None,
+        run_id: str | None = None,
+        resume_from_run_id: str | None = None,
     ) -> dict[str, Any]:
         project = self.repository.get_project(project_id)
         fragments = [
@@ -219,12 +221,32 @@ class ProjectApplicationService:
         ]
         if not fragments:
             raise ValueError("Primero debe cargar y procesar al menos una fuente.")
+        cached_summaries: dict[str, dict[str, Any]] = {}
+        if resume_from_run_id:
+            for key, payload in self.repository.list_run_checkpoints(
+                resume_from_run_id
+            ).items():
+                if key.startswith("definition_batch:") and isinstance(
+                    payload.get("summary"), dict
+                ):
+                    cached_summaries[key.split(":", 1)[1]] = payload["summary"]
+
+        def save_batch(signature: str, summary: dict[str, Any]) -> None:
+            if run_id:
+                self.repository.save_run_checkpoint(
+                    run_id,
+                    f"definition_batch:{signature}",
+                    {"signature": signature, "summary": summary},
+                )
+
         analysis = self.definition_agent.analyze(
             project["name"],
             project["domain"],
             fragments,
             maximum_questions=(self.settings.definition_max_questions if self.settings else 10),
             progress_callback=progress_callback,
+            existing_batch_summaries=cached_summaries,
+            batch_result_callback=save_batch,
         )
         self.repository.replace_definition_analysis(
             project_id, list(ProjectDefinitionAgent.CORE_QUESTIONS), analysis
@@ -294,6 +316,7 @@ class ProjectApplicationService:
         run_id: str | None = None,
         progress_callback: Callable[[int, str, str], None] | None = None,
         limits_by_type: dict[str, int] | None = None,
+        resume_from_run_id: str | None = None,
     ) -> dict[str, Any]:
         project = self.repository.get_project(project_id)
         if not project["definition_confirmed"]:
@@ -330,11 +353,57 @@ class ProjectApplicationService:
         )
         progress = progress_callback or (lambda _percent, _message, _step: None)
         self.repository.update_project_status(project_id, "generating")
+        prior_checkpoints = (
+            self.repository.list_run_checkpoints(resume_from_run_id)
+            if resume_from_run_id
+            else {}
+        )
         try:
             progress(8, "Preparando la recuperación híbrida", "retrieval")
             for position, artifact_type in enumerate(("RF", "RNF", "HU"), start=1):
                 contract = CONTRACTS[artifact_type]
-                progress(15 + (position - 1) * 24, f"Ejecutando {contract.agent_id}", f"generating_{artifact_type.lower()}")
+                checkpoint_key = f"generation_agent:{artifact_type}"
+                checkpoint = prior_checkpoints.get(checkpoint_key)
+                progress(
+                    15 + (position - 1) * 24,
+                    (
+                        f"Reutilizando {artifact_type} ya completados"
+                        if checkpoint
+                        else f"Ejecutando {contract.agent_id}"
+                    ),
+                    f"generating_{artifact_type.lower()}",
+                )
+                if checkpoint:
+                    restored = [
+                        Artifact.from_dict(item, artifact_type, index)
+                        for index, item in enumerate(checkpoint.get("artifacts", []), start=1)
+                    ]
+                    artifacts.extend(restored)
+                    retrieval_log[artifact_type] = list(checkpoint.get("retrieval", []))
+                    telemetry_log[artifact_type] = dict(checkpoint.get("telemetry", {})) | {
+                        "reused": True,
+                        "reused_from_run_id": resume_from_run_id,
+                    }
+                    missing_restored = [
+                        artifact
+                        for artifact in restored
+                        if not self.repository.get_artifact_by_key(
+                            project_id, artifact.artifact_id
+                        )
+                    ]
+                    if missing_restored:
+                        self.repository.save_artifacts(
+                            project_id,
+                            missing_restored,
+                            change_origin="generation_resume",
+                            update_project_status=False,
+                        )
+                    self.repository.save_run_checkpoint(
+                        parent_run,
+                        checkpoint_key,
+                        checkpoint | {"reused_from_run_id": resume_from_run_id},
+                    )
+                    continue
                 child_parameters = self.run_parameters(limits, recommendations, artifact_type)
                 child_parameters["parent_run_id"] = parent_run
                 if "experimental_config" in child_parameters:
@@ -378,6 +447,24 @@ class ProjectApplicationService:
                     if isinstance(retriever.reranker, JevReranker):
                         agent_metrics["jev"] = retriever.reranker.get_last_telemetry()
                     telemetry_log[artifact_type] = agent_metrics
+                    self.repository.save_artifacts(
+                        project_id,
+                        generated,
+                        change_origin="generation_checkpoint",
+                        update_project_status=False,
+                    )
+                    self.repository.save_run_checkpoint(
+                        parent_run,
+                        checkpoint_key,
+                        {
+                            "artifact_type": artifact_type,
+                            "requested_limit": limits[artifact_type],
+                            "generated_count": len(generated),
+                            "artifacts": [artifact.to_dict() for artifact in generated],
+                            "retrieval": retrieval_log[artifact_type],
+                            "telemetry": agent_metrics,
+                        },
+                    )
                     self.repository.finish_run(child_run_id, "completed", metrics=agent_metrics)
                 except Exception as error:
                     failure_metrics = (
@@ -406,13 +493,16 @@ class ProjectApplicationService:
             progress(100, "Artefactos disponibles para revisión", "completed")
 
             # Métricas agregadas para el parent run
-            total_latency = sum(item.get("latency_ms", 0.0) for item in telemetry_log.values())
-            total_tokens = sum(item.get("total_tokens", 0) or 0 for item in telemetry_log.values())
+            executed_telemetry = [
+                item for item in telemetry_log.values() if not item.get("reused")
+            ]
+            total_latency = sum(item.get("latency_ms", 0.0) for item in executed_telemetry)
+            total_tokens = sum(item.get("total_tokens", 0) or 0 for item in executed_telemetry)
             jev_tokens = sum(
                 (item.get("jev") or {}).get("total_tokens", 0) or 0
-                for item in telemetry_log.values()
+                for item in executed_telemetry
             )
-            total_attempts = sum(item.get("attempts", 1) for item in telemetry_log.values())
+            total_attempts = sum(item.get("attempts", 1) for item in executed_telemetry)
             generated_counts = {
                 artifact_type: sum(1 for artifact in artifacts if artifact.artifact_type == artifact_type)
                 for artifact_type in ("RF", "RNF", "HU")
@@ -427,6 +517,10 @@ class ProjectApplicationService:
                     artifact_type: generated_counts[artifact_type] >= limits[artifact_type]
                     for artifact_type in generated_counts
                 },
+                "generation_limits": limits,
+                "completed_types": list(telemetry_log),
+                "resumed_from_run_id": resume_from_run_id,
+                "resumable": False,
                 "agents": telemetry_log,
             }
             self.repository.finish_run(parent_run, "completed", metrics=summary_metrics)
@@ -437,7 +531,25 @@ class ProjectApplicationService:
                 "telemetry": summary_metrics,
             }
         except Exception as error:
-            self.repository.finish_run(parent_run, "failed", str(error))
+            generated_counts = {
+                artifact_type: sum(
+                    1 for artifact in artifacts if artifact.artifact_type == artifact_type
+                )
+                for artifact_type in ("RF", "RNF", "HU")
+            }
+            self.repository.finish_run(
+                parent_run,
+                "failed",
+                str(error),
+                metrics={
+                    "generated_counts": generated_counts,
+                    "generation_limits": limits,
+                    "completed_types": list(telemetry_log),
+                    "resumed_from_run_id": resume_from_run_id,
+                    "resumable": bool(telemetry_log),
+                    "agents": telemetry_log,
+                },
+            )
             self.repository.update_project_status(project_id, "ready_to_generate")
             raise
 
@@ -492,12 +604,13 @@ class ProjectApplicationService:
         target_type = str(values.get("artifact_type") or current["artifact_type"])
         if target_type not in {"RF", "RNF", "HU"}:
             raise ValueError("El tipo de artefacto debe ser RF, RNF o HU.")
+        requested_priority = str(values.get("priority", current["priority"]))
         artifact = Artifact(
             artifact_id=current["artifact_key"],
             artifact_type=target_type,
             title=str(values.get("title", current["title"])).strip(),
             description=str(values.get("description", current["description"])).strip(),
-            priority=str(values.get("priority", current["priority"])),
+            priority=requested_priority,
             source_fragments=list(values.get("source_fragments", current["source_fragments"])),
             status=str(values.get("status", current["status"])),
             acceptance_criteria=list(values.get("acceptance_criteria", current["acceptance_criteria"])),
@@ -506,6 +619,23 @@ class ProjectApplicationService:
                 if values.get("related_artifacts") is None
                 else values["related_artifacts"]
             ),
+            verification_criteria=list(
+                values.get("verification_criteria", current.get("verification_criteria", []))
+            ),
+            ears_pattern=str(values.get("ears_pattern", current.get("ears_pattern", "No determinado"))),
+            quality_category=str(values.get("quality_category", current.get("quality_category", ""))),
+            metric=str(values.get("metric", current.get("metric", ""))),
+            unit=str(values.get("unit", current.get("unit", ""))),
+            target=str(values.get("target", current.get("target", ""))),
+            verification_method=str(
+                values.get("verification_method", current.get("verification_method", ""))
+            ),
+            priority_source=(
+                "no_definida"
+                if requested_priority == "No definida"
+                else "usuario"
+            ),
+            rationale=str(values.get("rationale", current.get("rationale", ""))),
         )
         origin = (
             "manual_reclassification"
@@ -766,8 +896,15 @@ def project_export_payload(repository: SQLiteRepository, project_id: str) -> dic
             {key: item[key] for key in ("source_code", "original_name", "content_type", "source_kind", "sha256", "status")}
             for item in repository.list_sources(project_id)
         ],
+        "fragments": [fragment.__dict__ for fragment in repository.list_fragments(project_id)],
         "artifacts": [
-            {key: item[key] for key in ("artifact_key", "artifact_type", "title", "description", "priority", "source_fragments", "status", "acceptance_criteria", "related_artifacts", "validation", "version")}
+            {key: item[key] for key in (
+                "artifact_key", "artifact_type", "title", "description", "priority",
+                "priority_source", "source_fragments", "status", "acceptance_criteria",
+                "related_artifacts", "verification_criteria", "ears_pattern",
+                "quality_category", "metric", "unit", "target", "verification_method",
+                "rationale", "validation", "version",
+            )}
             for item in repository.list_artifacts(project_id)
         ],
         "validation": (repository.latest_validation_report(project_id) or {}).get("report", {}),

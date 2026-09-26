@@ -9,18 +9,38 @@ class ArtifactRecord(BaseModel):
     artifact_id: str = ""
     title: str = Field(min_length=1)
     description: str = Field(min_length=1)
-    priority: Literal["Alta", "Media", "Baja"] = "Media"
+    priority: Literal["Alta", "Media", "Baja", "No definida"] = "No definida"
+    priority_source: Literal["corpus", "usuario", "no_definida"] = "no_definida"
     source_fragments: list[str] = Field(min_length=1)
     status: Literal["propuesto", "requiere aclaración"] = "propuesto"
     acceptance_criteria: list[str] = Field(default_factory=list)
     related_artifacts: list[str] = Field(default_factory=list)
+    verification_criteria: list[str] = Field(default_factory=list)
+    ears_pattern: Literal[
+        "Ubicuo",
+        "Basado en evento",
+        "Basado en estado",
+        "Comportamiento no deseado",
+        "Característica opcional",
+        "Complejo",
+        "No aplica",
+        "No determinado",
+    ] = "No determinado"
+    quality_category: str = ""
+    metric: str = ""
+    unit: str = ""
+    target: str = ""
+    verification_method: str = ""
+    rationale: str = ""
 
     @field_validator("priority")
     @classmethod
     def normalize_priority(cls, value: str) -> str:
         normalized = value.strip().capitalize()
-        if normalized not in {"Alta", "Media", "Baja"}:
-            raise ValueError("La prioridad debe ser Alta, Media o Baja.")
+        if normalized == "No Definida":
+            normalized = "No definida"
+        if normalized not in {"Alta", "Media", "Baja", "No definida"}:
+            raise ValueError("La prioridad debe ser Alta, Media, Baja o No definida.")
         return normalized
 
     @field_validator("title", "description")
@@ -31,7 +51,9 @@ class ArtifactRecord(BaseModel):
             raise ValueError("El texto no puede estar vacío.")
         return value
 
-    @field_validator("source_fragments", "acceptance_criteria", "related_artifacts")
+    @field_validator(
+        "source_fragments", "acceptance_criteria", "related_artifacts", "verification_criteria"
+    )
     @classmethod
     def normalize_lists(cls, values: list[str]) -> list[str]:
         return list(dict.fromkeys(value.strip() for value in values if value.strip()))
@@ -49,6 +71,14 @@ class ArtifactRecord(BaseModel):
             raise ValueError(f"Relaciones inexistentes: {sorted(invalid_relations)}")
         if context.get("artifact_type") == "HU" and not self.acceptance_criteria:
             raise ValueError("Una historia de usuario debe incluir criterios de aceptación.")
+        if self.priority == "No definida":
+            self.priority_source = "no_definida"
+        elif self.priority_source != "corpus":
+            # Compatibilidad segura con respuestas/modelos antiguos: una
+            # prioridad sin procedencia no se rechaza ni se acepta como hecho;
+            # se convierte en una decisión pendiente.
+            self.priority = "No definida"
+            self.priority_source = "no_definida"
         return self
 
 

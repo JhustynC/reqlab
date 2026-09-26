@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 
@@ -115,6 +116,36 @@ class FakeDeepSeekClient:
         return {"artifact": {}}
 
 
+class RecoverableFakeDeepSeekClient(FakeDeepSeekClient):
+    def __init__(self):
+        super().__init__()
+        self.fail_hu_once = True
+
+    def complete_json(self, system_prompt, user_prompt, temperature=0.1, timeout=120):
+        if (
+            self.fail_hu_once
+            and "Tarea exclusiva del agente" in user_prompt
+            and "Expresar necesidades de los actores" in user_prompt
+        ):
+            self.prompts.append(user_prompt)
+            self.fail_hu_once = False
+            raise RuntimeError("Fallo transitorio controlado en HU")
+        return super().complete_json(system_prompt, user_prompt, temperature, timeout)
+
+
+class RecoverableDefinitionClient(FakeDeepSeekClient):
+    def __init__(self):
+        super().__init__()
+        self.fail_synthesis_once = True
+
+    def complete_json(self, system_prompt, user_prompt, temperature=0.1, timeout=120):
+        if self.fail_synthesis_once and "Construye un perfil provisional" in user_prompt:
+            self.prompts.append(user_prompt)
+            self.fail_synthesis_once = False
+            raise RuntimeError("Fallo transitorio controlado en síntesis")
+        return super().complete_json(system_prompt, user_prompt, temperature, timeout)
+
+
 class WebWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -178,6 +209,129 @@ class WebWorkflowTests(unittest.TestCase):
         self.assertEqual(["RF-001"], next(item for item in saved if item["artifact_type"] == "HU")["related_artifacts"])
         self.assertTrue(all("status" in item["validation"] for item in saved))
         self.assertEqual("review", self.repository.get_project(project["id"])["status"])
+
+    def test_failed_generation_resumes_from_first_pending_agent(self):
+        client = RecoverableFakeDeepSeekClient()
+        service = ProjectApplicationService(
+            self.repository, self.vector_store, Path(self.temporary.name), client
+        )
+        project = service.create_project("Mesa reanudable", domain="soporte")
+        service.ingest(
+            project["id"],
+            "fuente.txt",
+            b"El operador registra solicitudes y conserva su estado para dar seguimiento.",
+            "text/plain",
+        )
+        service.analyze_definition(project["id"])
+        for question in self.repository.list_questions(project["id"]):
+            if question["required"]:
+                self.repository.save_answer(project["id"], question["question_key"], "Respuesta controlada.")
+        service.confirm_definition(project["id"])
+
+        with self.assertRaisesRegex(RuntimeError, "Fallo transitorio"):
+            service.generate_artifacts(project["id"], limits_by_type={"RF": 2, "RNF": 2, "HU": 2})
+        failed = self.repository.latest_run(project["id"])
+        self.assertEqual("failed", failed["status"])
+        self.assertEqual(["RF", "RNF"], failed["parameters"]["metrics"]["completed_types"])
+        self.assertEqual(2, len(self.repository.list_artifacts(project["id"])))
+        checkpoints = self.repository.list_run_checkpoints(failed["id"])
+        self.assertIn("generation_agent:RF", checkpoints)
+        self.assertIn("generation_agent:RNF", checkpoints)
+
+        resumed = self.repository.start_run(
+            project["id"],
+            "generation",
+            "orchestrator.main",
+            service.run_parameters({"RF": 2, "RNF": 2, "HU": 2}),
+        )
+        result = service.generate_artifacts(
+            project["id"],
+            limits_by_type={"RF": 2, "RNF": 2, "HU": 2},
+            run_id=resumed,
+            resume_from_run_id=failed["id"],
+        )
+
+        generation_prompts = [p for p in client.prompts if "Tarea exclusiva del agente" in p]
+        self.assertEqual(1, sum("Identificar capacidades" in p for p in generation_prompts))
+        self.assertEqual(1, sum("Identificar atributos de calidad" in p for p in generation_prompts))
+        self.assertEqual(2, sum("Expresar necesidades de los actores" in p for p in generation_prompts))
+        self.assertEqual(3, len(result["artifacts"]))
+        completed = self.repository.get_run(resumed)
+        self.assertEqual("completed", completed["status"])
+        self.assertEqual(failed["id"], completed["parameters"]["metrics"]["resumed_from_run_id"])
+        self.assertTrue(completed["parameters"]["metrics"]["agents"]["RF"]["reused"])
+        saved = self.repository.list_artifacts(project["id"])
+        self.assertEqual({"RF", "RNF", "HU"}, {item["artifact_type"] for item in saved})
+        self.assertTrue(all(item["version"] == 1 for item in saved))
+
+    def test_definition_retry_reuses_completed_batches(self):
+        client = RecoverableDefinitionClient()
+        service = ProjectApplicationService(
+            self.repository, self.vector_store, Path(self.temporary.name), client
+        )
+        project = service.create_project("Definición reanudable")
+        service.ingest(
+            project["id"],
+            "fuente.txt",
+            b"El operador registra solicitudes y el responsable consulta su estado.",
+            "text/plain",
+        )
+        first_run = self.repository.start_run(project["id"], "definition", "definition.main")
+        with self.assertRaisesRegex(RuntimeError, "Fallo transitorio"):
+            service.analyze_definition(project["id"], run_id=first_run)
+        self.repository.finish_run(first_run, "failed", "Fallo transitorio")
+        self.assertTrue(self.repository.list_run_checkpoints(first_run))
+
+        second_run = self.repository.start_run(project["id"], "definition", "definition.main")
+        analysis = service.analyze_definition(
+            project["id"], run_id=second_run, resume_from_run_id=first_run
+        )
+        self.repository.finish_run(second_run, "completed")
+        batch_prompts = [p for p in client.prompts if "Extrae hallazgos" in p]
+        synthesis_prompts = [p for p in client.prompts if "Construye un perfil provisional" in p]
+        self.assertEqual(1, len(batch_prompts))
+        self.assertEqual(2, len(synthesis_prompts))
+        self.assertEqual(1, analysis["coverage"]["batch_count"])
+        self.assertTrue(self.repository.list_run_checkpoints(second_run))
+
+    def test_integral_lifecycle_from_unstructured_sources_to_export(self):
+        project = self.service.create_project(
+            "Flujo integral", "Prueba reproducible del recorrido completo", "servicios"
+        )
+        self.service.ingest_text(
+            project["id"],
+            "Correo del coordinador",
+            "Necesitamos registrar solicitudes, consultar su estado y conservar un historial verificable.",
+            "email",
+        )
+        self.service.ingest(
+            project["id"],
+            "entrevista.txt",
+            b"El operador atiende solicitudes y el supervisor necesita revisar su seguimiento.",
+            "text/plain",
+        )
+        self.service.analyze_definition(project["id"])
+        for question in self.repository.list_questions(project["id"]):
+            if question["required"]:
+                self.repository.save_answer(
+                    project["id"], question["question_key"], "Decisión confirmada para la prueba integral."
+                )
+        self.service.confirm_definition(project["id"])
+        result = self.service.generate_artifacts(
+            project["id"], limits_by_type={"RF": 3, "RNF": 3, "HU": 3}
+        )
+        approval = self.service.approve_all_artifacts(project["id"])
+        payload = project_export_payload(self.repository, project["id"])
+        exported_json = json.dumps(payload, ensure_ascii=False)
+
+        self.assertEqual(3, len(result["artifacts"]))
+        self.assertEqual(3, approval["approved_count"])
+        self.assertTrue(all(item["status"] == "aceptado" for item in payload["artifacts"]))
+        self.assertEqual(2, len(payload["sources"]))
+        self.assertTrue(payload["validation"])
+        self.assertEqual("completed", payload["generation_run"]["status"])
+        self.assertIn('"artifact_type": "RF"', exported_json)
+        self.assertGreater(len(exported_json), 1000)
         self.assertEqual(3, project_export_payload(self.repository, project["id"])["validation"]["artifact_count"])
 
     def test_source_preview_and_deletion_invalidate_derived_content(self):
@@ -442,7 +596,6 @@ class WebWorkflowTests(unittest.TestCase):
 
         second = self.service.approve_all_artifacts(project["id"])
         self.assertEqual(0, second["approved_count"])
-
 
 if __name__ == "__main__":
     unittest.main()

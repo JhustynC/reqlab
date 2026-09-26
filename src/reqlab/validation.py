@@ -31,6 +31,33 @@ class TraceabilityConsistencyAgent:
             for artifact in artifacts
             if artifact.artifact_type == "HU" and not artifact.acceptance_criteria
         ]
+        requirements_without_verification = [
+            artifact.artifact_id
+            for artifact in artifacts
+            if artifact.artifact_type in {"RF", "RNF"} and not artifact.verification_criteria
+        ]
+        requirements_with_invalid_ears = [
+            artifact.artifact_id
+            for artifact in artifacts
+            if artifact.artifact_type == "RF" and not self._is_ears_compliant(artifact)
+        ]
+        non_functional_measurement_pending = [
+            {
+                "artifact_id": artifact.artifact_id,
+                "missing_fields": self._missing_rnf_fields(artifact),
+            }
+            for artifact in artifacts
+            if artifact.artifact_type == "RNF" and self._missing_rnf_fields(artifact)
+        ]
+        undefined_priorities = [
+            artifact.artifact_id for artifact in artifacts if artifact.priority == "No definida"
+        ]
+        priorities_without_source = [
+            artifact.artifact_id
+            for artifact in artifacts
+            if artifact.priority != "No definida"
+            and artifact.priority_source not in {"corpus", "usuario"}
+        ]
         taxonomy_warnings = self._taxonomy_warnings(artifacts)
         invalid_relations = self._invalid_relations(artifacts)
         duplicates = self._duplicates(artifacts, self.duplicate_threshold)
@@ -48,12 +75,21 @@ class TraceabilityConsistencyAgent:
             "ambiguities_detected": self._ambiguities(artifacts, ambiguity_registry or []),
             "user_stories_with_invalid_format": malformed_stories,
             "user_stories_without_acceptance_criteria": stories_without_criteria,
+            "requirements_without_verification_criteria": requirements_without_verification,
+            "requirements_with_invalid_ears": requirements_with_invalid_ears,
+            "non_functional_measurement_pending": non_functional_measurement_pending,
+            "undefined_priorities": undefined_priorities,
+            "priorities_without_source": priorities_without_source,
             "taxonomy_warnings": taxonomy_warnings,
             "traceability_status": "requiere_revision" if not traceability_valid else "trazabilidad_minima_valida",
             "quality_status": "requiere_revision"
             if (
                 malformed_stories
                 or stories_without_criteria
+                or requirements_without_verification
+                or requirements_with_invalid_ears
+                or non_functional_measurement_pending
+                or priorities_without_source
                 or taxonomy_warnings
                 or invalid_relations
                 or duplicates
@@ -72,6 +108,41 @@ class TraceabilityConsistencyAgent:
     def _is_user_story(description: str) -> bool:
         lowered = description.strip().lower()
         return lowered.startswith("como ") and ", quiero " in lowered and ", para " in lowered
+
+    @staticmethod
+    def _is_ears_compliant(artifact: Artifact) -> bool:
+        """Comprueba la forma EARS sin atribuir corrección semántica al patrón."""
+        text = " ".join(artifact.description.strip().lower().split())
+        pattern = artifact.ears_pattern.strip().lower()
+        # EARS admite el nombre concreto del sistema, no solo la frase literal
+        # "el sistema". La comprobación conserva esa generalidad.
+        has_response = " deberá " in f" {text} " or " debe " in f" {text} "
+        if not has_response or pattern in {"", "no determinado", "no aplica"}:
+            return False
+        if pattern == "ubicuo":
+            return has_response and not text.startswith(("cuando ", "mientras ", "si "))
+        if pattern == "basado en evento":
+            return text.startswith("cuando ") and has_response
+        if pattern == "basado en estado":
+            return text.startswith("mientras ") and has_response
+        if pattern == "comportamiento no deseado":
+            return text.startswith("si ") and " entonces " in text and has_response
+        if pattern == "característica opcional":
+            return text.startswith("cuando ") and " incluya " in text and has_response
+        if pattern == "complejo":
+            return has_response and text.startswith(("cuando ", "mientras ", "si "))
+        return False
+
+    @staticmethod
+    def _missing_rnf_fields(artifact: Artifact) -> list[str]:
+        values = {
+            "categoría de calidad": artifact.quality_category,
+            "métrica": artifact.metric,
+            "unidad": artifact.unit,
+            "umbral": artifact.target,
+            "método de verificación": artifact.verification_method,
+        }
+        return [label for label, value in values.items() if not str(value).strip()]
 
     @staticmethod
     def _taxonomy_warnings(artifacts: list[Artifact]) -> list[dict]:
@@ -173,6 +244,19 @@ class TraceabilityConsistencyAgent:
                 warnings.append("La historia no cumple el patrón Como–quiero–para.")
             if key in report["user_stories_without_acceptance_criteria"]:
                 warnings.append("La historia no incluye criterios de aceptación.")
+            if key in report["requirements_without_verification_criteria"]:
+                warnings.append("El requisito no incluye un criterio explícito de verificación.")
+            if key in report["requirements_with_invalid_ears"]:
+                warnings.append("El requisito funcional no cumple el patrón EARS declarado.")
+            for item in report["non_functional_measurement_pending"]:
+                if item["artifact_id"] == key:
+                    warnings.append(
+                        "El RNF requiere completar: " + ", ".join(item["missing_fields"]) + "."
+                    )
+            if key in report["undefined_priorities"]:
+                warnings.append("La prioridad está pendiente de definición por una persona responsable.")
+            if key in report["priorities_without_source"]:
+                warnings.append("La prioridad no conserva una procedencia verificable.")
             warnings.extend(
                 item["reason"] for item in report["taxonomy_warnings"] if item["artifact_id"] == key
             )

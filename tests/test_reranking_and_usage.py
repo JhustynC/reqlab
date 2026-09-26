@@ -61,19 +61,34 @@ class RerankingAndUsageTests(unittest.TestCase):
             self.assertEqual("typesafe/jev-1.13", payload["model"])
             self.assertEqual([first.fragment_id, second.fragment_id], [p["id"] for p in payload["state"]["passages"]])
             return {
+                "id": "req-jev-test",
+                "model": "typesafe/jev-1.13-202609",
+                "provider": "test-provider",
                 "answers": {
                     "relevant_0": {"type": "noul", "noul": 0.3},
                     "evidence_0": {"type": "noul", "noul": 0.2},
                     "relevant_1": {"type": "noul", "noul": 0.9},
                     "evidence_1": {"type": "noul", "noul": 0.8},
                 },
-                "usage": {"input_tokens": 100, "output_tokens": 8},
+                "usage": {"input_tokens": 100, "output_tokens": 8, "cost": 0.0000045},
             }
 
         with patch.object(client, "_decide", side_effect=response):
             ranked = client.rerank("reglas de registro", [(first, 0.9), (second, 0.7)], 2)
         self.assertEqual([second.fragment_id, first.fragment_id], [item.fragment_id for item, _ in ranked])
-        self.assertEqual(108, client.get_last_telemetry()["total_tokens"])
+        audit = client.get_last_telemetry()
+        self.assertEqual(108, audit["total_tokens"])
+        self.assertEqual("completed", audit["status"])
+        self.assertEqual(2, audit["candidate_count"])
+        self.assertEqual(2, audit["selected_count"])
+        self.assertEqual(["typesafe/jev-1.13-202609"], audit["served_models"])
+        self.assertAlmostEqual(0.0000045, audit["cost"])
+        self.assertEqual("req-jev-test", audit["request_audit"][0]["request_id"])
+        by_id = {item["fragment_id"]: item for item in audit["candidates"]}
+        self.assertEqual(1, by_id[first.fragment_id]["original_rrf_rank"])
+        self.assertEqual(2, by_id[first.fragment_id]["final_rank"])
+        self.assertEqual(1, by_id[second.fragment_id]["final_rank"])
+        self.assertAlmostEqual(0.85, by_id[second.fragment_id]["combined_score"])
 
     def test_reranking_preference_survives_repository_reopen(self):
         with tempfile.TemporaryDirectory() as folder:

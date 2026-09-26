@@ -65,6 +65,25 @@ import { IconComponent } from './icon.component';
           </div>
           <h3 class="detail-title">{{ artifact.title }}</h3>
           <p class="stage-desc">{{ artifact.description }}</p>
+          <div class="artifact-structure">
+            <p><strong>Prioridad:</strong> {{ artifact.priority }} · {{ prioritySourceLabel(artifact.priority_source) }}</p>
+            @if (artifact.artifact_type !== 'HU') {
+              <p><strong>Patrón:</strong> {{ artifact.ears_pattern }}</p>
+              <strong>Criterios de verificación</strong>
+              <ul>
+                @for (criterion of artifact.verification_criteria; track criterion) {
+                  <li>{{ criterion }}</li>
+                } @empty {
+                  <li>Pendiente de definición</li>
+                }
+              </ul>
+            }
+            @if (artifact.artifact_type === 'RNF') {
+              <p><strong>Categoría:</strong> {{ artifact.quality_category || 'Pendiente' }}</p>
+              <p><strong>Medición:</strong> {{ measurementLabel(artifact) }}</p>
+              <p><strong>Verificación:</strong> {{ artifact.verification_method || 'Pendiente' }}</p>
+            }
+          </div>
           @if (artifact.validation?.warnings?.length) {
             <div class="artifact-validation">
               <strong><app-icon name="warning" /> Aspectos por revisar</strong>
@@ -269,6 +288,46 @@ import { IconComponent } from './icon.component';
             style="min-height:140px"
             [(ngModel)]="draft.description"
           ></textarea>
+          <label class="form-label gap" for="edit-priority">Prioridad</label>
+          <select id="edit-priority" name="priority" [(ngModel)]="draft.priority">
+            <option value="No definida">No definida</option>
+            <option value="Alta">Alta</option>
+            <option value="Media">Media</option>
+            <option value="Baja">Baja</option>
+          </select>
+          @if (draft.artifact_type !== 'HU') {
+            <label class="form-label gap" for="edit-ears">Patrón EARS</label>
+            <select id="edit-ears" name="earsPattern" [(ngModel)]="draft.ears_pattern">
+              <option value="No determinado">No determinado</option>
+              <option value="Ubicuo">Ubicuo</option>
+              <option value="Basado en evento">Basado en evento</option>
+              <option value="Basado en estado">Basado en estado</option>
+              <option value="Comportamiento no deseado">Comportamiento no deseado</option>
+              <option value="Característica opcional">Característica opcional</option>
+              <option value="Complejo">Complejo</option>
+              <option value="No aplica">No aplica</option>
+            </select>
+            <label class="form-label gap" for="edit-verification">Criterios de verificación (uno por línea)</label>
+            <textarea id="edit-verification" name="verification" [(ngModel)]="draft.verification_criteria"></textarea>
+          }
+          @if (draft.artifact_type === 'RNF') {
+            <label class="form-label gap" for="edit-quality">Categoría de calidad</label>
+            <input id="edit-quality" name="qualityCategory" [(ngModel)]="draft.quality_category" />
+            <div class="row gap">
+              <div style="flex:1"><label class="form-label" for="edit-metric">Métrica</label><input id="edit-metric" name="metric" [(ngModel)]="draft.metric" /></div>
+              <div style="flex:1"><label class="form-label" for="edit-unit">Unidad</label><input id="edit-unit" name="unit" [(ngModel)]="draft.unit" /></div>
+            </div>
+            <label class="form-label gap" for="edit-target">Umbral o valor objetivo</label>
+            <input id="edit-target" name="target" [(ngModel)]="draft.target" />
+            <label class="form-label gap" for="edit-method">Método de verificación</label>
+            <textarea id="edit-method" name="verificationMethod" [(ngModel)]="draft.verification_method"></textarea>
+          }
+          @if (draft.artifact_type === 'HU') {
+            <label class="form-label gap" for="edit-acceptance">Criterios de aceptación (uno por línea)</label>
+            <textarea id="edit-acceptance" name="acceptance" [(ngModel)]="draft.acceptance_criteria"></textarea>
+          }
+          <label class="form-label gap" for="edit-rationale">Justificación sustentada (opcional)</label>
+          <textarea id="edit-rationale" name="rationale" [(ngModel)]="draft.rationale"></textarea>
           <div class="actions">
             <button class="btn" type="button" (click)="editing.set(false)">Descartar cambio</button
             ><button class="btn primary" type="submit" [disabled]="busy()">
@@ -339,10 +398,25 @@ export class EvidencePanelComponent {
   readonly assisting = signal(false);
   readonly busy = signal(false);
   instruction = '';
-  draft: { artifact_type: Artifact['artifact_type']; title: string; description: string } = {
+  draft: {
+    artifact_type: Artifact['artifact_type']; title: string; description: string;
+    priority: Artifact['priority']; ears_pattern: Artifact['ears_pattern'];
+    verification_criteria: string; acceptance_criteria: string; quality_category: string;
+    metric: string; unit: string; target: string; verification_method: string; rationale: string;
+  } = {
     artifact_type: 'RF',
     title: '',
     description: '',
+    priority: 'No definida',
+    ears_pattern: 'No determinado',
+    verification_criteria: '',
+    acceptance_criteria: '',
+    quality_category: '',
+    metric: '',
+    unit: '',
+    target: '',
+    verification_method: '',
+    rationale: '',
   };
 
   constructor() {
@@ -376,7 +450,12 @@ export class EvidencePanelComponent {
       Object.values(report?.invalid_relations ?? {}).reduce((sum, items) => sum + items.length, 0) +
       (report?.user_stories_with_invalid_format?.length ?? 0) +
       (report?.user_stories_without_acceptance_criteria?.length ?? 0) +
-      (report?.taxonomy_warnings.length ?? 0)
+      (report?.taxonomy_warnings.length ?? 0) +
+      (report?.requirements_without_verification_criteria?.length ?? 0) +
+      (report?.requirements_with_invalid_ears?.length ?? 0) +
+      (report?.non_functional_measurement_pending?.length ?? 0) +
+      (report?.undefined_priorities?.length ?? 0) +
+      (report?.priorities_without_source?.length ?? 0)
     );
   }
   nextStep(): string {
@@ -410,6 +489,16 @@ export class EvidencePanelComponent {
       artifact_type: artifact.artifact_type,
       title: artifact.title,
       description: artifact.description,
+      priority: artifact.priority,
+      ears_pattern: artifact.ears_pattern,
+      verification_criteria: artifact.verification_criteria.join('\n'),
+      acceptance_criteria: artifact.acceptance_criteria.join('\n'),
+      quality_category: artifact.quality_category,
+      metric: artifact.metric,
+      unit: artifact.unit,
+      target: artifact.target,
+      verification_method: artifact.verification_method,
+      rationale: artifact.rationale,
     };
     this.editing.set(true);
   }
@@ -449,6 +538,16 @@ export class EvidencePanelComponent {
       artifact_type: this.draft.artifact_type,
       title: this.draft.title.trim(),
       description: this.draft.description.trim(),
+      priority: this.draft.priority,
+      ears_pattern: this.draft.artifact_type === 'HU' ? 'No aplica' : this.draft.ears_pattern,
+      verification_criteria: this.lines(this.draft.verification_criteria),
+      acceptance_criteria: this.lines(this.draft.acceptance_criteria),
+      quality_category: this.draft.artifact_type === 'RNF' ? this.draft.quality_category.trim() : '',
+      metric: this.draft.artifact_type === 'RNF' ? this.draft.metric.trim() : '',
+      unit: this.draft.artifact_type === 'RNF' ? this.draft.unit.trim() : '',
+      target: this.draft.artifact_type === 'RNF' ? this.draft.target.trim() : '',
+      verification_method: this.draft.artifact_type === 'RNF' ? this.draft.verification_method.trim() : '',
+      rationale: this.draft.rationale.trim(),
       status: 'propuesto',
     });
     this.editing.set(false);
@@ -466,6 +565,16 @@ export class EvidencePanelComponent {
     } finally {
       this.busy.set(false);
     }
+  }
+  private lines(value: string): string[] {
+    return value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  }
+  prioritySourceLabel(value: Artifact['priority_source']): string {
+    return ({ corpus: 'según el corpus', usuario: 'decidida por el usuario', legado: 'sin procedencia histórica', no_definida: 'pendiente' })[value];
+  }
+  measurementLabel(artifact: Artifact): string {
+    const parts = [artifact.metric, artifact.target, artifact.unit].filter(Boolean);
+    return parts.length ? parts.join(' · ') : 'Pendiente de definición';
   }
   beginAssist(): void {
     this.instruction = '';

@@ -10,7 +10,9 @@ from ..schemas import DefinitionAnswersUpdate, DefinitionConfirmRequest
 router = APIRouter(prefix="/projects/{project_id}/definition", tags=["definition"])
 
 
-def execute_definition(project_id: str, run_id: str) -> None:
+def execute_definition(
+    project_id: str, run_id: str, resume_from_run_id: str | None = None
+) -> None:
     repository = get_repository()
     service = None
 
@@ -22,6 +24,8 @@ def execute_definition(project_id: str, run_id: str) -> None:
         analysis = service.analyze_definition(
             project_id,
             progress_callback=progress,
+            run_id=run_id,
+            resume_from_run_id=resume_from_run_id,
         )
         progress(100, "Interpretación provisional disponible", "completed")
         metrics = {
@@ -59,6 +63,9 @@ def analyze(project_id: str, background_tasks: BackgroundTasks) -> dict:
         current = repository.latest_run(project_id, agent_id="definition.main")
         if current and current["status"] == "running":
             return {"run_id": current["id"], "status": "running", "resumed": True}
+        resume_from_run_id = (
+            current["id"] if current and current["status"] == "failed" else None
+        )
         run_id = repository.start_run(
             project_id,
             "definition",
@@ -67,6 +74,7 @@ def analyze(project_id: str, background_tasks: BackgroundTasks) -> dict:
                 "progress": 0,
                 "step": "queued",
                 "message": "Análisis de definición en cola",
+                "resumed_from_run_id": resume_from_run_id,
                 "experimental_config": (
                     get_service().settings.experimental_snapshot()
                     if get_service().settings
@@ -74,8 +82,14 @@ def analyze(project_id: str, background_tasks: BackgroundTasks) -> dict:
                 ),
             },
         )
-        background_tasks.add_task(execute_definition, project_id, run_id)
-        return {"run_id": run_id, "status": "running", "resumed": False}
+        background_tasks.add_task(
+            execute_definition, project_id, run_id, resume_from_run_id
+        )
+        return {
+            "run_id": run_id,
+            "status": "running",
+            "resumed": bool(resume_from_run_id),
+        }
     except KeyError as error:
         raise not_found(error) from error
     except (ValueError, RuntimeError) as error:

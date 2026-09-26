@@ -142,6 +142,15 @@ export class ApiService {
       { limits },
     );
   }
+  resumeGeneration(
+    projectId: string,
+    runId: string,
+  ): Observable<{ run_id: string; status: string; limits: GenerationLimits; resumed_from_run_id: string }> {
+    return this.http.post<{ run_id: string; status: string; limits: GenerationLimits; resumed_from_run_id: string }>(
+      `${this.base}/projects/${projectId}/generation/resume`,
+      { run_id: runId },
+    );
+  }
   generationRecommendations(projectId: string): Observable<GenerationRecommendations> {
     return this.http.get<GenerationRecommendations>(
       `${this.base}/projects/${projectId}/generation/recommendations`,
@@ -165,10 +174,19 @@ export class ApiService {
       title: artifact.title,
       description: artifact.description,
       priority: artifact.priority,
+      priority_source: artifact.priority_source,
       status: artifact.status,
       source_fragments: artifact.source_fragments,
       acceptance_criteria: artifact.acceptance_criteria,
       related_artifacts: artifact.related_artifacts,
+      verification_criteria: artifact.verification_criteria,
+      ears_pattern: artifact.ears_pattern,
+      quality_category: artifact.quality_category,
+      metric: artifact.metric,
+      unit: artifact.unit,
+      target: artifact.target,
+      verification_method: artifact.verification_method,
+      rationale: artifact.rationale,
     });
   }
   approveAllArtifacts(

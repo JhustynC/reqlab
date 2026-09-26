@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit, inject, signal } from '@angular/core';
+import { Component, OnDestroy, OnInit, computed, inject, signal } from '@angular/core';
 import { Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { ApiService } from '../../core/api.service';
@@ -17,10 +17,10 @@ import { IconComponent } from '../../shared/icon.component';
   template: `
     <div class="stage-body generation-stage">
       <div class="stage-label"><app-icon name="spark" /> De las fuentes a las propuestas</div>
-      <h2>{{ busy() ? 'Construyendo tus artefactos…' : store.artifacts().length ? 'La generación está completa' : 'Todo listo para generar' }}</h2>
-      <p class="stage-desc">{{ busy() ? 'Puedes seguir cada etapa del proceso mientras los agentes consultan el corpus del proyecto.' : 'El sistema prepara propuestas de RF, RNF e historias de usuario y comprueba sus referencias. Tú decides qué conservar.' }}</p>
+      <h2>{{ busy() ? 'Construyendo tus artefactos…' : generationComplete() ? 'La generación está completa' : generationFailed() ? 'La generación quedó incompleta' : 'Todo listo para generar' }}</h2>
+      <p class="stage-desc">{{ busy() ? 'Puedes seguir cada etapa del proceso mientras los agentes consultan el corpus del proyecto.' : generationFailed() ? 'Los agentes terminados quedaron guardados. Puedes continuar desde el primer paso pendiente sin repetirlos.' : 'El sistema prepara propuestas de RF, RNF e historias de usuario y comprueba sus referencias. Tú decides qué conservar.' }}</p>
 
-      @if (!busy() && !store.artifacts().length) {
+      @if (!busy() && !store.artifacts().length && !generationFailed()) {
         <section class="generation-budget" aria-labelledby="generation-budget-title">
           <header class="generation-budget-head">
             <div>
@@ -81,6 +81,28 @@ import { IconComponent } from '../../shared/icon.component';
         </section>
       }
 
+      @if (!busy() && store.run()?.parameters?.metrics; as metrics) {
+        <section class="generation-summary" [class.partial]="generationFailed()" aria-labelledby="generation-summary-title">
+          <header class="generation-budget-head">
+            <div>
+              <span class="eyebrow">{{ generationFailed() ? 'Avance recuperable' : 'Resultado de la ejecución' }}</span>
+              <h3 id="generation-summary-title">{{ generatedTotal() }} artefactos generados de un máximo de {{ requestedTotal() }}</h3>
+            </div>
+            <span class="pill" [class.green]="generationComplete()" [class.amber]="generationFailed()">{{ generationComplete() ? 'Completa' : 'Incompleta' }}</span>
+          </header>
+          <div class="generation-summary-grid">
+            @for (item of budgetTypes; track item.type) {
+              <div>
+                <span class="artifact-id">{{ item.type }}</span>
+                <strong>{{ generatedCount(item.type) }} / {{ requestedCount(item.type) }}</strong>
+                <small>{{ item.label }} · generado / máximo solicitado</small>
+              </div>
+            }
+          </div>
+          <p class="generation-budget-note">Los máximos no son cuotas. Una cantidad menor es válida cuando el agente no encuentra evidencia suficiente. En una ejecución incompleta solo se reanuda el primer agente pendiente.</p>
+        </section>
+      }
+
       <div class="row between gap"><small class="muted">{{ busy() ? (store.run()?.parameters?.message || 'Ejecución en curso') : store.artifacts().length ? '6 etapas completadas' : (store.sources().length + ' fuentes · definición confirmada') }}</small><span class="pill" [class.purple]="busy()" [class.green]="!busy()">{{ progress() }} %</span></div>
       <div class="progress" role="progressbar" aria-label="Progreso de generación" aria-valuemin="0" aria-valuemax="100" [attr.aria-valuenow]="progress()"><div [style.width.%]="progress()"></div></div>
       <div class="execution">
@@ -92,10 +114,11 @@ import { IconComponent } from '../../shared/icon.component';
           </div>
         }
       </div>
-      @if (store.run()?.status === 'failed') { <div class="alert error">{{ store.run()?.error_message || 'La generación no pudo completarse.' }}</div> }
+      @if (store.run()?.status === 'failed') { <div class="alert error"><strong>La ejecución se detuvo.</strong> {{ store.run()?.error_message || 'La generación no pudo completarse.' }} @if (completedTypes().length) { <span>Se conservaron: {{ completedTypes().join(', ') }}.</span> }</div> }
       <footer class="stage-footer">
         <small>Las propuestas siempre pasan por revisión humana.</small>
-        @if (store.artifacts().length && !busy()) { <button class="btn primary" type="button" (click)="openReview()">Revisar propuestas <app-icon name="arrow" /></button> }
+        @if (generationComplete() && !busy()) { <button class="btn primary" type="button" (click)="openReview()">Revisar propuestas <app-icon name="arrow" /></button> }
+        @else if (generationFailed() && !busy()) { <button class="btn primary" type="button" (click)="resume()"><app-icon name="arrow" /> Reanudar desde {{ nextPendingStep() }}</button> }
         @else { <button class="btn primary" type="button" (click)="start()" [disabled]="busy() || loadingRecommendations() || !!recommendationError() || !recommendations() || !store.project()?.definition_confirmed">@if (busy()) { <span class="spinner small"></span> Generando } @else { <app-icon name="spark" /> Generar propuestas }</button> }
       </footer>
     </div>
@@ -110,6 +133,9 @@ export class GenerationStageComponent implements OnInit, OnDestroy {
   readonly recommendationError = signal('');
   readonly recommendations = signal<GenerationRecommendations | null>(null);
   readonly limits = signal<GenerationLimits>({ RF: 12, RNF: 12, HU: 12 });
+  readonly generationComplete = computed(() => this.store.run()?.status === 'completed');
+  readonly generationFailed = computed(() => this.store.run()?.status === 'failed');
+  readonly completedTypes = computed(() => this.store.run()?.parameters.metrics?.completed_types ?? []);
   private timer?: ReturnType<typeof setTimeout>;
   readonly budgetTypes: Array<{ type: ArtifactType; label: string; shortLabel: string }> = [
     { type: 'RF', label: 'Requisitos funcionales', shortLabel: 'funcionalidad' },
@@ -126,6 +152,11 @@ export class GenerationStageComponent implements OnInit, OnDestroy {
   ];
 
   ngOnInit(): void {
+    const activeRun = this.store.run();
+    if (activeRun?.status === 'running') {
+      this.busy.set(true);
+      void this.poll(activeRun.id);
+    }
     void this.loadRecommendations();
   }
 
@@ -174,7 +205,12 @@ export class GenerationStageComponent implements OnInit, OnDestroy {
     this.limits.update((current) => ({ ...current, [type]: value }));
   }
 
-  progress(): number { return this.store.run()?.parameters.progress ?? (this.store.artifacts().length ? 100 : 0); }
+  progress(): number { return this.store.run()?.parameters.progress ?? (this.generationComplete() ? 100 : 0); }
+  generatedCount(type: ArtifactType): number { return this.store.run()?.parameters.metrics?.generated_counts?.[type] ?? this.store.counts()[type]; }
+  requestedCount(type: ArtifactType): number { return this.store.run()?.parameters.metrics?.generation_limits?.[type] ?? this.store.run()?.parameters.generation_limits?.[type] ?? 0; }
+  generatedTotal(): number { return this.budgetTypes.reduce((total, item) => total + this.generatedCount(item.type), 0); }
+  requestedTotal(): number { return this.budgetTypes.reduce((total, item) => total + this.requestedCount(item.type), 0); }
+  nextPendingStep(): string { return this.budgetTypes.find((item) => !this.completedTypes().includes(item.type))?.type ?? 'validación'; }
   openReview(): void { const project = this.store.project(); if (project) void this.router.navigate(['/projects', project.id, 'review']); }
   async start(): Promise<void> {
     const project = this.store.project(); if (!project) return;
@@ -184,13 +220,22 @@ export class GenerationStageComponent implements OnInit, OnDestroy {
       await this.poll(queued.run_id);
     } catch (error) { this.store.setError(this.store.message(error)); this.busy.set(false); }
   }
+  async resume(): Promise<void> {
+    const project = this.store.project();
+    const run = this.store.run();
+    if (!project || !run || run.status !== 'failed') return;
+    this.busy.set(true); this.store.clearError();
+    try {
+      const queued = await firstValueFrom(this.api.resumeGeneration(project.id, run.id));
+      await this.poll(queued.run_id);
+    } catch (error) { this.store.setError(this.store.message(error)); this.busy.set(false); }
+  }
   private async poll(runId: string): Promise<void> {
     try {
       const run = await firstValueFrom(this.api.getRun(runId));
       this.store.run.set(run);
       if (run.status === 'completed') {
         this.busy.set(false); await this.store.refreshProject();
-        const project = this.store.project(); if (project) await this.router.navigate(['/projects', project.id, 'review']);
         return;
       }
       if (run.status === 'failed') { this.busy.set(false); return; }
@@ -198,7 +243,9 @@ export class GenerationStageComponent implements OnInit, OnDestroy {
     } catch (error) { this.store.setError(this.store.message(error)); this.busy.set(false); }
   }
   stepDone(order: number): boolean {
-    if (!this.busy() && this.store.artifacts().length > 0) return true;
+    if (this.generationComplete()) return true;
+    const stepType: Partial<Record<number, ArtifactType>> = { 2: 'RF', 3: 'RNF', 4: 'HU' };
+    if (stepType[order] && this.completedTypes().includes(stepType[order]!)) return true;
     const current = this.steps.find((item) => item.key === this.store.run()?.parameters.step)?.order ?? 0;
     return order < current || this.store.run()?.status === 'completed';
   }

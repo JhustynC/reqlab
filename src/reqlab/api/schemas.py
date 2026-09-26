@@ -74,15 +74,28 @@ class GenerationRequest(BaseModel):
         return {"RF": fallback, "RNF": fallback, "HU": fallback}
 
 
+class GenerationResumeRequest(BaseModel):
+    run_id: str = Field(min_length=1, max_length=80)
+
+
 class ArtifactUpdate(BaseModel):
     artifact_type: str | None = Field(default=None, pattern="^(RF|RNF|HU)$")
     title: str = Field(min_length=1, max_length=240)
     description: str = Field(min_length=1, max_length=8000)
-    priority: str = Field(pattern="^(Alta|Media|Baja)$")
+    priority: str = Field(pattern="^(Alta|Media|Baja|No definida)$")
     status: str = Field(pattern="^(propuesto|requiere aclaración|aceptado|rechazado)$")
     source_fragments: list[str]
     acceptance_criteria: list[str] = Field(default_factory=list)
     related_artifacts: list[str] | None = None
+    verification_criteria: list[str] = Field(default_factory=list)
+    ears_pattern: str = Field(default="No determinado", max_length=80)
+    quality_category: str = Field(default="", max_length=160)
+    metric: str = Field(default="", max_length=500)
+    unit: str = Field(default="", max_length=120)
+    target: str = Field(default="", max_length=500)
+    verification_method: str = Field(default="", max_length=2000)
+    priority_source: str = Field(default="no_definida", pattern="^(corpus|usuario|legado|no_definida)$")
+    rationale: str = Field(default="", max_length=2000)
 
 
 class BulkArtifactApproval(BaseModel):
