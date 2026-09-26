@@ -1,4 +1,6 @@
-# Evaluación de viabilidad de Jev sin revisión humana
+# Evaluación inicial de viabilidad de Jev sin revisión humana
+
+> Nota de vigencia: este informe conserva las condiciones de la revisión inicial. La integración posterior ya fue probada con OpenRouter y cuenta con auditoría persistente; la utilidad de Jev frente a expertos continúa pendiente de evaluación.
 
 Fecha de evaluación: 21 de septiembre de 2026.
 
@@ -23,11 +25,11 @@ El código de ReqLab ya cubre el contrato técnico del piloto:
 - Las huellas de entradas permiten marcar como `stale` un resultado después de una edición.
 - Las respuestas exitosas conservan el estado y las preguntas enviadas, la versión del modelo, las probabilidades, la confianza y la telemetría.
 
-Las ocho pruebas específicas del módulo y la suite completa (41 pruebas) pasan con clientes simulados. Estas pruebas verifican la integración, no la inteligencia de Jev.
+En la revisión inicial, las ocho pruebas específicas del módulo y la suite entonces disponible (41 pruebas) pasaban con clientes simulados. La suite actual se reporta en `docs/cierre_estabilizacion.md`. Estas pruebas verifican la integración, no la inteligencia de Jev.
 
 ## Evidencia que no existe todavía
 
-La clave disponible es de OpenRouter. Antes de esta corrección, ReqLab todavía apuntaba por defecto a la API directa de TypeSafe, por lo que no era válido usar esa clave con la configuración anterior. La ruta se corrigió para OpenRouter (`/api/alpha/decisions`, modelo `typesafe/jev-1.13`). La prueba mínima confirmó que la configuración carga la clave sin exponerla, pero el entorno de ejecución bloqueó la conexión saliente con `WinError 10013`; por tanto, todavía no hay respuesta real de Jev ni resultados sobre el corpus Altavista, español, latencia, costo, tasa de errores o estabilidad entre repeticiones.
+En esa revisión, la clave disponible era de OpenRouter. Antes de la corrección, ReqLab todavía apuntaba por defecto a la API directa de TypeSafe, por lo que no era válido usar esa clave con la configuración anterior. La ruta se corrigió para OpenRouter (`/api/alpha/decisions`, modelo `typesafe/jev-1.13`). En aquel entorno la prueba mínima confirmó que la configuración cargaba la clave sin exponerla, pero la conexión saliente fue bloqueada con `WinError 10013`; por ello ese informe inicial no contenía resultados reales sobre el corpus Altavista, español, latencia, costo, tasa de errores o estabilidad entre repeticiones.
 
 Tampoco existe una referencia externa para decidir si una clasificación semántica es correcta. Sustituir a dos expertos por otra respuesta generada por un modelo, incluido este asistente, produciría una comparación circular: serviría como prueba de funcionamiento, pero no como validación independiente.
 

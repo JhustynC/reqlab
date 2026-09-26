@@ -44,11 +44,23 @@ La recuperación es híbrida: combina TF-IDF y similitud vectorial mediante Reci
 
 Desde Configuración en la página de Proyectos se puede activar el reranking y elegir entre el modelo local y Jev vía OpenRouter. La elección se guarda en SQLite y se aplica a las siguientes generaciones y revisiones. El modelo local usa CPU y memoria del equipo; Jev envía la consulta y los fragmentos candidatos a OpenRouter, consume créditos y requiere `OPENROUTER_API_KEY` en `.env`. Si Jev falla, la ejecución informa el error para que no parezca que se usó el proveedor seleccionado. Fuentes se procesa localmente y no consume tokens de API. En Revisión, la pestaña Ejecución muestra los tokens registrados por proyecto, con desglose de Definición, Generación, Revisiones, Validación semántica y Jev. Las ejecuciones anteriores sin telemetría completa se indican como tales.
 
+## Reanudación y resultados de generación
+
+El análisis de definición guarda un punto de control por lote. Si falla la síntesis final, el siguiente intento reutiliza únicamente los lotes cuyo contenido conserva la misma huella SHA-256 y repite la síntesis, no todas las llamadas anteriores.
+
+La generación guarda RF, RNF y HU al finalizar cada agente. Si una ejecución se interrumpe, la interfaz muestra qué tipos quedaron conservados y permite reanudar desde el primer agente pendiente. Una reanudación mantiene los límites y la configuración experimental de la ejecución original, y no contabiliza otra vez los tokens de los agentes reutilizados.
+
+Al finalizar se presenta la cantidad generada frente al máximo solicitado por tipo. El máximo es un presupuesto operativo, no una cuota; devolver menos artefactos no constituye por sí solo un error.
+
+Cuando Jev se usa como reranker, cada ejecución conserva la auditoría de todos los candidatos: posición y puntuación RRF, probabilidad de relevancia, probabilidad de evidencia útil, promedio aplicado, posición final y selección. También registra solicitudes, identificadores informados por OpenRouter, modelo solicitado y servido, proveedor, intentos, tokens, costo cuando está disponible y latencia. Las respuestas 429 y 5xx se reintentan de forma acotada; no existe sustitución silenciosa por otro reranker.
+
 La configuración de referencia utiliza `deepseek-flash`, identificador oficial de DeepSeek-V4.1-Flash. ReqLab desactiva explícitamente el modo de razonamiento para mantener una generación JSON controlada y reproducible, conserva una temperatura de `0.1`, limita cada respuesta a `12000` tokens y registra el modelo servido, la huella del sistema, el motivo de finalización y el consumo desglosado cuando la API los proporciona. Estos valores pueden configurarse mediante `LLM_MODEL`, `LLM_THINKING_ENABLED` y `LLM_MAX_TOKENS`, pero deben congelarse antes del experimento formal.
 
 Cada ejecución conserva una instantánea de su configuración técnica. Los resultados incluyen relaciones explícitas RF–RNF–HU, validación por artefacto y vínculos separados hacia la evidencia documental. Angular presenta esta información en las vistas de revisión, trazabilidad, observaciones y ejecución.
 
 Las observaciones son alertas, no decisiones automáticas. Cada una permite abrir el artefacto afectado para editarlo, reclasificarlo, cambiar su estado o solicitar una propuesta asistida. Una reclasificación crea una nueva versión, asigna una clave acorde con el nuevo tipo y actualiza las relaciones internas que utilizaban la clave anterior.
+
+Los RF utilizan patrones EARS y los RF/RNF incluyen criterios de verificación. Los RNF conservan categoría de calidad, métrica, unidad, umbral y método de verificación cuando están sustentados; lo ausente queda pendiente. La prioridad admite `No definida` y nunca se completa automáticamente como media. La exportación DOCX presenta fichas según el tipo de artefacto y una matriz con fragmento, fuente y extracto de evidencia.
 
 ## Piloto opcional de validación semántica con Jev
 

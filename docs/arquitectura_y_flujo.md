@@ -46,12 +46,12 @@ Persistencia
 | Índice vectorial | Fragmentos y metadatos de proyecto | Calcular embeddings locales y persistirlos en ChromaDB. | Colección vectorial filtrable por proyecto. |
 | Agente recuperador híbrido | Consulta del agente | Fusionar ranking TF-IDF y vectorial con Reciprocal Rank Fusion. | Evidencia contextual ordenada. |
 | Agente de definición | Todos los fragmentos de las fuentes del proyecto | Analizar el corpus completo por lotes, consolidar hallazgos y contradicciones, construir una interpretación provisional y preguntar solo por información ausente, dudosa o decisiva. | Perfil provisional trazable, cobertura del análisis y preguntas adaptativas. |
-| Agente RF | Evidencia recuperada | Generar capacidades observables, sin atributos de calidad ni diseño inventado. | RF estructurados y citados. |
-| Agente RNF | Evidencia recuperada | Generar atributos/restricciones verificables sin inventar umbrales. | RNF estructurados y citados. |
+| Agente RF | Evidencia recuperada | Generar capacidades observables con patrones EARS, sin atributos de calidad ni diseño inventado. | RF citados y con criterio de verificación. |
+| Agente RNF | Evidencia recuperada | Generar atributos/restricciones verificables sin inventar métricas ni umbrales. | RNF citados con categoría y campos de medición explícitos o pendientes. |
 | Agente HU | Evidencia recuperada | Generar historias con rol, objetivo, beneficio y criterios de aceptación. | HU estructuradas y citadas. |
-| Validador determinista | Artefactos y catálogo de fragmentos | Detectar citas ausentes/inválidas, formato HU, criterios faltantes y posibles duplicados. | Reporte de alertas reproducible. |
+| Validador determinista | Artefactos y catálogo de fragmentos | Detectar citas ausentes/inválidas, formato EARS y HU, criterios faltantes, RNF incompletos, prioridades sin procedencia y posibles duplicados. | Reporte de alertas reproducible. |
 | Agente de revisión | Artefacto, solicitud del usuario y evidencia | Proponer una edición sin sobrescribir la versión vigente. | Propuesta aceptable o descartable. |
-| Exportador | Perfil, artefactos y validación | Construir una entrega legible y otra estructurada. | DOCX y JSON. |
+| Exportador | Perfil, artefactos, fragmentos y validación | Construir fichas por tipo y matriz artefacto--fragmento, además de la salida estructurada. | DOCX y JSON. |
 
 ## Estado del proyecto
 
