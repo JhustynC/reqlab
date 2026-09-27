@@ -1144,6 +1144,71 @@ class SQLiteRepository:
                 approved_count += 1
         return approved_count
 
+    def update_artifact_priorities(
+        self, project_id: str, updates: list[dict[str, str]]
+    ) -> int:
+        """Actualiza prioridades en una transacción y versiona solo cambios reales."""
+        now = utc_now()
+        changed = 0
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM artifacts WHERE project_id = ?", (project_id,)
+            ).fetchall()
+            by_id = {row["id"]: row for row in rows}
+            missing = [item["artifact_id"] for item in updates if item["artifact_id"] not in by_id]
+            if missing:
+                raise KeyError(f"Artefactos no encontrados en el proyecto: {', '.join(missing)}")
+
+            for item in updates:
+                row = by_id[item["artifact_id"]]
+                priority = item["priority"]
+                details = json.loads(row["details_json"] or "{}")
+                priority_source = "no_definida" if priority == "No definida" else "usuario"
+                if row["priority"] == priority and details.get("priority_source") == priority_source:
+                    continue
+                details["priority_source"] = priority_source
+                version = int(row["version"]) + 1
+                snapshot = {
+                    "artifact_id": row["artifact_key"],
+                    "artifact_type": row["artifact_type"],
+                    "title": row["title"],
+                    "description": row["description"],
+                    "priority": priority,
+                    "source_fragments": json.loads(row["source_fragments_json"] or "[]"),
+                    "status": row["status"],
+                    "acceptance_criteria": json.loads(row["acceptance_criteria_json"] or "[]"),
+                    "related_artifacts": json.loads(row["related_artifacts_json"] or "[]"),
+                    **details,
+                    "version": version,
+                }
+                connection.execute(
+                    """UPDATE artifacts
+                       SET priority = ?, details_json = ?, validation_json = '{}',
+                           version = ?, updated_at = ?
+                       WHERE id = ?""",
+                    (priority, json.dumps(details, ensure_ascii=False), version, now, row["id"]),
+                )
+                connection.execute(
+                    """INSERT INTO artifact_versions
+                       (id, artifact_id, version, snapshot_json, change_origin,
+                        change_instruction, created_at)
+                       VALUES (?, ?, ?, ?, 'bulk_priority', ?, ?)""",
+                    (
+                        str(uuid.uuid4()),
+                        row["id"],
+                        version,
+                        json.dumps(snapshot, ensure_ascii=False),
+                        "Prioridad actualizada mediante la vista de priorización masiva.",
+                        now,
+                    ),
+                )
+                changed += 1
+            if changed:
+                connection.execute(
+                    "UPDATE projects SET updated_at = ? WHERE id = ?", (now, project_id)
+                )
+        return changed
+
     def next_artifact_key(self, project_id: str, artifact_type: str) -> str:
         if artifact_type not in {"RF", "RNF", "HU"}:
             raise ValueError("Tipo de artefacto no permitido.")

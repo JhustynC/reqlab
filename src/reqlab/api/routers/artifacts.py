@@ -4,7 +4,13 @@ from fastapi import APIRouter, Query
 
 from ..dependencies import get_repository, get_service
 from ..errors import bad_request, not_found
-from ..schemas import ArtifactUpdate, BulkArtifactApproval, RevisionDecision, RevisionRequest
+from ..schemas import (
+    ArtifactUpdate,
+    BulkArtifactApproval,
+    BulkArtifactPriorityUpdate,
+    RevisionDecision,
+    RevisionRequest,
+)
 
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["artifacts"])
@@ -38,6 +44,21 @@ def approve_all_artifacts(project_id: str, payload: BulkArtifactApproval) -> dic
         if not payload.confirmed:
             raise ValueError("La aprobación masiva requiere confirmación explícita.")
         return get_service().approve_all_artifacts(project_id)
+    except KeyError as error:
+        raise not_found(error) from error
+    except ValueError as error:
+        raise bad_request(error) from error
+
+
+@router.post("/artifacts/priorities")
+def update_artifact_priorities(project_id: str, payload: BulkArtifactPriorityUpdate) -> dict:
+    try:
+        if not payload.confirmed:
+            raise ValueError("La priorización masiva requiere confirmación explícita.")
+        return get_service().update_artifact_priorities(
+            project_id,
+            [item.model_dump() for item in payload.items],
+        )
     except KeyError as error:
         raise not_found(error) from error
     except ValueError as error:

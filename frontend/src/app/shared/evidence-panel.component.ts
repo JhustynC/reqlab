@@ -524,6 +524,7 @@ export class EvidencePanelComponent {
           manual_reclassification: 'Reclasificación manual',
           reference_rekey: 'Relación actualizada',
           bulk_approval: 'Aprobación masiva',
+          bulk_priority: 'Priorización masiva',
           ai_revision: 'Edición asistida',
         } as Record<string, string>
       )[String(origin)] ?? String(origin ?? 'Cambio')

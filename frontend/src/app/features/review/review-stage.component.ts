@@ -1,4 +1,5 @@
 import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { firstValueFrom } from 'rxjs';
@@ -9,10 +10,11 @@ import { IconComponent } from '../../shared/icon.component';
 
 type ReviewTab = 'artifacts' | 'trace' | 'alerts' | 'run';
 type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
+type PriorityArtifactFilter = 'Todos' | ArtifactType;
 
 @Component({
   selector: 'app-review-stage',
-  imports: [IconComponent],
+  imports: [FormsModule, IconComponent],
   template: `
     <div class="stage-body review-stage">
       <div class="stage-label"><app-icon name="spark" /> El criterio final es tuyo</div>
@@ -47,15 +49,20 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
             <small style="font-size:10px;color:var(--mint);display:flex;align-items:center;gap:3px;margin-top:10px"
               ><app-icon name="link" /> {{ citedCount() }} con fuente vinculada</small
             >
-          <button
-            class="btn primary"
-            type="button"
-            (click)="approvalWarningOpen.set(true)"
-            [disabled]="busy() || remainingApprovalCount() === 0"
-          >
-            <app-icon name="check" />
-            {{ remainingApprovalCount() === 0 ? 'Todo aprobado' : 'Aprobar todo' }}
-          </button>
+          <div class="row wrap review-actions">
+            <button class="btn" type="button" (click)="openPriorityManager()" [disabled]="busy()">
+              <app-icon name="layers" /> Gestionar prioridades
+            </button>
+            <button
+              class="btn primary"
+              type="button"
+              (click)="approvalWarningOpen.set(true)"
+              [disabled]="busy() || remainingApprovalCount() === 0"
+            >
+              <app-icon name="check" />
+              {{ remainingApprovalCount() === 0 ? 'Todo aprobado' : 'Aprobar todo' }}
+            </button>
+          </div>
         </div>
         <div class="filter-row">
           @for (item of filters; track item) {
@@ -561,6 +568,145 @@ type ArtifactFilter = 'Todos' | 'RF' | 'RNF' | 'HU' | 'Aprobados';
       </div>
     }
 
+    @if (priorityManagerOpen()) {
+      <div class="modal-backdrop" (click)="closePriorityManager()">
+        <section
+          class="modal-card priority-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="priority-manager-title"
+          (click)="$event.stopPropagation()"
+        >
+          <button
+            class="icon-btn modal-close"
+            type="button"
+            (click)="closePriorityManager()"
+            aria-label="Cerrar"
+          >
+            ×
+          </button>
+          <span class="pill purple">Priorización humana</span>
+          <h2 id="priority-manager-title">Gestionar prioridades</h2>
+          <p>
+            Revisa y ajusta varias prioridades sin abrir cada artefacto. Los cambios se guardarán
+            juntos, pero cada artefacto conservará su propia versión y procedencia.
+          </p>
+
+          <div class="priority-summary" aria-label="Resumen de prioridades">
+            @for (priority of priorityOptions; track priority) {
+              <div>
+                <small>{{ priority }}</small>
+                <strong>{{ priorityCount(priority) }}</strong>
+              </div>
+            }
+          </div>
+
+          <div class="priority-bulk-action">
+            <label>
+              <span>Asignar a todos los artefactos</span>
+              <select
+                [ngModel]="bulkPriority()"
+                (ngModelChange)="bulkPriority.set($event)"
+              >
+                <option value="" disabled>Selecciona una prioridad</option>
+                @for (priority of priorityOptions; track priority) {
+                  <option [ngValue]="priority">{{ priority }}</option>
+                }
+              </select>
+            </label>
+            <button
+              class="btn"
+              type="button"
+              (click)="applyPriorityToAll()"
+              [disabled]="!bulkPriority()"
+            >
+              Aplicar a los {{ store.artifacts().length }} artefactos
+            </button>
+            <small>El cambio se prepara primero; podrás revisarlo antes de guardarlo.</small>
+          </div>
+
+          <div class="priority-tools">
+            <div class="filter-row priority-filters" aria-label="Filtrar artefactos">
+              @for (item of priorityFilters; track item) {
+                <button
+                  type="button"
+                  [class.active]="priorityFilter() === item"
+                  (click)="priorityFilter.set(item)"
+                >
+                  {{ item }}
+                </button>
+              }
+            </div>
+            <label class="priority-search">
+              <span>Buscar</span>
+              <input
+                type="search"
+                placeholder="ID, título o descripción"
+                [ngModel]="prioritySearch()"
+                (ngModelChange)="prioritySearch.set($event)"
+              />
+            </label>
+          </div>
+
+          <div class="priority-list-caption">
+            <span>{{ priorityArtifacts().length }} artefactos visibles</span>
+            <strong>{{ changedPriorityCount() }} cambios preparados</strong>
+          </div>
+          <div class="priority-list">
+            @for (artifact of priorityArtifacts(); track artifact.id) {
+              <article
+                class="priority-row"
+                [class.changed]="priorityDraft()[artifact.id] !== artifact.priority"
+              >
+                <div class="priority-artifact-copy">
+                  <div class="row wrap">
+                    <span class="artifact-id">{{ artifact.artifact_key }}</span>
+                    <span class="pill purple">{{ artifact.artifact_type }}</span>
+                  </div>
+                  <strong>{{ artifact.title }}</strong>
+                  <small>{{ prioritySourceLabel(artifact.priority_source) }}</small>
+                </div>
+                <label>
+                  <span>Prioridad</span>
+                  <select
+                    [ngModel]="priorityDraft()[artifact.id]"
+                    (ngModelChange)="setDraftPriority(artifact.id, $event)"
+                  >
+                    @for (priority of priorityOptions; track priority) {
+                      <option [ngValue]="priority">{{ priority }}</option>
+                    }
+                  </select>
+                </label>
+              </article>
+            } @empty {
+              <p class="empty-filter">No hay artefactos que coincidan con la búsqueda.</p>
+            }
+          </div>
+
+          <div class="notice gap">
+            <app-icon name="check" />
+            <div>
+              <strong>Solo se modificarán las prioridades preparadas.</strong><br />La redacción,
+              el tipo y el estado de revisión de los artefactos no cambiarán.
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn" type="button" (click)="closePriorityManager()" [disabled]="busy()">
+              Cancelar
+            </button>
+            <button
+              class="btn primary"
+              type="button"
+              (click)="savePriorities()"
+              [disabled]="busy() || changedPriorityCount() === 0"
+            >
+              {{ busy() ? 'Guardando…' : 'Guardar ' + changedPriorityCount() + ' cambios' }}
+            </button>
+          </div>
+        </section>
+      </div>
+    }
+
   `,
 })
 export class ReviewStageComponent implements OnInit {
@@ -573,8 +719,15 @@ export class ReviewStageComponent implements OnInit {
   readonly tab = signal<ReviewTab>('artifacts');
   readonly filter = signal<ArtifactFilter>('Todos');
   readonly approvalWarningOpen = signal(false);
+  readonly priorityManagerOpen = signal(false);
+  readonly priorityFilter = signal<PriorityArtifactFilter>('Todos');
+  readonly prioritySearch = signal('');
+  readonly priorityDraft = signal<Record<string, Artifact['priority']>>({});
+  readonly bulkPriority = signal<Artifact['priority'] | ''>('');
   readonly busy = signal(false);
   readonly filters: ArtifactFilter[] = ['Todos', 'RF', 'RNF', 'HU', 'Aprobados'];
+  readonly priorityFilters: PriorityArtifactFilter[] = ['Todos', 'RF', 'RNF', 'HU'];
+  readonly priorityOptions: Artifact['priority'][] = ['No definida', 'Alta', 'Media', 'Baja'];
   readonly filtered = computed(() =>
     this.store
       .artifacts()
@@ -625,6 +778,80 @@ export class ReviewStageComponent implements OnInit {
       await firstValueFrom(this.api.approveAllArtifacts(project.id));
       this.approvalWarningOpen.set(false);
       await this.store.refreshProject();
+    } catch (error) {
+      this.store.setError(this.store.message(error));
+    } finally {
+      this.busy.set(false);
+    }
+  }
+  openPriorityManager(): void {
+    this.priorityDraft.set(
+      Object.fromEntries(this.store.artifacts().map((artifact) => [artifact.id, artifact.priority])),
+    );
+    this.priorityFilter.set('Todos');
+    this.prioritySearch.set('');
+    this.bulkPriority.set('');
+    this.priorityManagerOpen.set(true);
+  }
+  closePriorityManager(): void {
+    if (!this.busy()) this.priorityManagerOpen.set(false);
+  }
+  priorityArtifacts(): Artifact[] {
+    const filter = this.priorityFilter();
+    const query = this.prioritySearch().trim().toLocaleLowerCase('es');
+    return this.store.artifacts().filter((artifact) => {
+      if (filter !== 'Todos' && artifact.artifact_type !== filter) return false;
+      if (!query) return true;
+      return [artifact.artifact_key, artifact.title, artifact.description]
+        .join(' ')
+        .toLocaleLowerCase('es')
+        .includes(query);
+    });
+  }
+  setDraftPriority(artifactId: string, priority: Artifact['priority']): void {
+    this.priorityDraft.update((draft) => ({ ...draft, [artifactId]: priority }));
+  }
+  applyPriorityToAll(): void {
+    const priority = this.bulkPriority();
+    if (!priority) return;
+    this.priorityDraft.set(
+      Object.fromEntries(this.store.artifacts().map((artifact) => [artifact.id, priority])),
+    );
+  }
+  changedPriorityCount(): number {
+    const draft = this.priorityDraft();
+    return this.store.artifacts().filter(
+      (artifact) => draft[artifact.id] != null && draft[artifact.id] !== artifact.priority,
+    ).length;
+  }
+  priorityCount(priority: Artifact['priority']): number {
+    const draft = this.priorityDraft();
+    return this.store.artifacts().filter(
+      (artifact) => (draft[artifact.id] ?? artifact.priority) === priority,
+    ).length;
+  }
+  prioritySourceLabel(source: Artifact['priority_source']): string {
+    return {
+      corpus: 'Sugerida por evidencia del corpus',
+      usuario: 'Confirmada por el usuario',
+      legado: 'Sin procedencia histórica',
+      no_definida: 'Pendiente de decisión',
+    }[source];
+  }
+  async savePriorities(): Promise<void> {
+    const project = this.store.project();
+    if (!project) return;
+    const draft = this.priorityDraft();
+    const items = this.store
+      .artifacts()
+      .filter((artifact) => draft[artifact.id] != null && draft[artifact.id] !== artifact.priority)
+      .map((artifact) => ({ artifact_id: artifact.id, priority: draft[artifact.id] }));
+    if (!items.length) return;
+    this.busy.set(true);
+    try {
+      await firstValueFrom(this.api.updateArtifactPriorities(project.id, items));
+      await this.store.refreshProject();
+      this.priorityManagerOpen.set(false);
     } catch (error) {
       this.store.setError(this.store.message(error));
     } finally {

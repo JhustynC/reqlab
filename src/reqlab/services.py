@@ -659,6 +659,27 @@ class ProjectApplicationService:
             "artifacts": self.repository.list_artifacts(project_id),
         }
 
+    def update_artifact_priorities(
+        self, project_id: str, updates: list[dict[str, str]]
+    ) -> dict[str, Any]:
+        self.repository.get_project(project_id)
+        if not updates:
+            raise ValueError("Seleccione al menos una prioridad para guardar.")
+        identifiers = [item["artifact_id"] for item in updates]
+        if len(identifiers) != len(set(identifiers)):
+            raise ValueError("Un artefacto no puede aparecer más de una vez en la actualización.")
+        allowed = {"Alta", "Media", "Baja", "No definida"}
+        if any(item["priority"] not in allowed for item in updates):
+            raise ValueError("Existe una prioridad no permitida.")
+        changed_count = self.repository.update_artifact_priorities(project_id, updates)
+        if changed_count:
+            self._refresh_validation(project_id)
+        return {
+            "changed_count": changed_count,
+            "total_count": len(self.repository.list_artifacts(project_id)),
+            "artifacts": self.repository.list_artifacts(project_id),
+        }
+
     def _refresh_validation(self, project_id: str) -> None:
         artifacts = [
             Artifact.from_dict(item | {"artifact_id": item["artifact_key"]}, item["artifact_type"], index)

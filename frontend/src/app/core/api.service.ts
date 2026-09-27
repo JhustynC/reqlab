@@ -197,6 +197,15 @@ export class ApiService {
       { confirmed: true },
     );
   }
+  updateArtifactPriorities(
+    projectId: string,
+    items: Array<{ artifact_id: string; priority: Artifact['priority'] }>,
+  ): Observable<{ changed_count: number; total_count: number; artifacts: Artifact[] }> {
+    return this.http.post<{ changed_count: number; total_count: number; artifacts: Artifact[] }>(
+      `${this.base}/projects/${projectId}/artifacts/priorities`,
+      { confirmed: true, items },
+    );
+  }
   listVersions(projectId: string, artifactId: string): Observable<Array<Record<string, unknown>>> {
     return this.http.get<Array<Record<string, unknown>>>(
       `${this.base}/projects/${projectId}/artifacts/${artifactId}/versions`,

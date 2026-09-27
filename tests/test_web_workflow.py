@@ -597,5 +597,45 @@ class WebWorkflowTests(unittest.TestCase):
         second = self.service.approve_all_artifacts(project["id"])
         self.assertEqual(0, second["approved_count"])
 
+    def test_bulk_priority_update_versions_only_changes_and_preserves_status(self):
+        project = self.service.create_project("Mesa de ayuda", domain="soporte")
+        self.service.ingest(
+            project["id"],
+            "fuente.txt",
+            b"El operador registra solicitudes y consulta su estado. El sistema conserva su historial.",
+            "text/plain",
+        )
+        self.service.analyze_definition(project["id"])
+        for question in self.repository.list_questions(project["id"]):
+            if question["required"]:
+                self.repository.save_answer(
+                    project["id"], question["question_key"], "Respuesta confirmada."
+                )
+        self.service.confirm_definition(project["id"])
+        self.service.generate_artifacts(project["id"], limit_per_type=3)
+        artifacts = self.repository.list_artifacts(project["id"])
+
+        result = self.service.update_artifact_priorities(
+            project["id"],
+            [
+                {"artifact_id": artifacts[0]["id"], "priority": "Alta"},
+                {"artifact_id": artifacts[1]["id"], "priority": "Baja"},
+            ],
+        )
+
+        self.assertEqual(2, result["changed_count"])
+        updated = {item["id"]: item for item in result["artifacts"]}
+        self.assertEqual("Alta", updated[artifacts[0]["id"]]["priority"])
+        self.assertEqual("usuario", updated[artifacts[0]["id"]]["priority_source"])
+        self.assertEqual("propuesto", updated[artifacts[0]["id"]]["status"])
+        version = self.repository.list_versions(artifacts[0]["id"])[0]
+        self.assertEqual("bulk_priority", version["change_origin"])
+
+        unchanged = self.service.update_artifact_priorities(
+            project["id"],
+            [{"artifact_id": artifacts[0]["id"], "priority": "Alta"}],
+        )
+        self.assertEqual(0, unchanged["changed_count"])
+
 if __name__ == "__main__":
     unittest.main()

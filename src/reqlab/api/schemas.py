@@ -102,6 +102,16 @@ class BulkArtifactApproval(BaseModel):
     confirmed: bool
 
 
+class ArtifactPriorityUpdate(BaseModel):
+    artifact_id: str = Field(min_length=1, max_length=80)
+    priority: str = Field(pattern="^(Alta|Media|Baja|No definida)$")
+
+
+class BulkArtifactPriorityUpdate(BaseModel):
+    confirmed: bool
+    items: list[ArtifactPriorityUpdate] = Field(min_length=1, max_length=300)
+
+
 class RevisionRequest(BaseModel):
     instruction: str = Field(min_length=3, max_length=2000)
 
