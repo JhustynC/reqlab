@@ -48,59 +48,8 @@ def build_docx(payload: dict[str, Any]) -> bytes:
             document.add_paragraph("No se generaron artefactos de este tipo.")
             continue
         for item in artifacts:
-            document.add_heading(f"{item['artifact_key']}. {item['title']}", level=2)
-            document.add_paragraph(item["description"])
-            metadata = document.add_paragraph()
-            metadata.add_run("Prioridad: ").bold = True
-            metadata.add_run(f"{item['priority']}   ")
-            metadata.add_run("Procedencia de prioridad: ").bold = True
-            metadata.add_run(f"{_priority_source_label(item.get('priority_source'))}   ")
-            metadata.add_run("Estado: ").bold = True
-            metadata.add_run(f"{item['status']}   ")
-            metadata.add_run("Versión: ").bold = True
-            metadata.add_run(str(item["version"]))
-            trace = document.add_paragraph()
-            trace.add_run("Fuentes: ").bold = True
-            trace.add_run(", ".join(item["source_fragments"]) or "Sin evidencia asociada")
-            if item.get("related_artifacts"):
-                relations = document.add_paragraph()
-                relations.add_run("Artefactos relacionados: ").bold = True
-                relations.add_run(", ".join(item["related_artifacts"]))
-            if item.get("rationale"):
-                rationale = document.add_paragraph()
-                rationale.add_run("Justificación: ").bold = True
-                rationale.add_run(str(item["rationale"]))
-            if artifact_type in {"RF", "RNF"}:
-                pattern = document.add_paragraph()
-                pattern.add_run("Patrón de redacción: ").bold = True
-                pattern.add_run(str(item.get("ears_pattern") or "No determinado"))
-                document.add_paragraph("Criterios de verificación:")
-                for criterion in item.get("verification_criteria") or []:
-                    document.add_paragraph(str(criterion), style="List Bullet")
-                if not item.get("verification_criteria"):
-                    document.add_paragraph("Pendiente de definición.")
-            if artifact_type == "RNF":
-                details = document.add_table(rows=0, cols=2)
-                details.style = "Table Grid"
-                for label, key in (
-                    ("Categoría de calidad", "quality_category"),
-                    ("Métrica", "metric"),
-                    ("Unidad", "unit"),
-                    ("Umbral o valor objetivo", "target"),
-                    ("Método de verificación", "verification_method"),
-                ):
-                    cells = details.add_row().cells
-                    cells[0].text = label
-                    cells[1].text = str(item.get(key) or "Pendiente de definición")
-            warnings = (item.get("validation") or {}).get("warnings", [])
-            if warnings:
-                document.add_paragraph("Observaciones automáticas:")
-                for warning in warnings:
-                    document.add_paragraph(str(warning), style="List Bullet")
-            if item.get("acceptance_criteria"):
-                document.add_paragraph("Criterios de aceptación:")
-                for criterion in item["acceptance_criteria"]:
-                    document.add_paragraph(str(criterion), style="List Bullet")
+            _add_artifact_table(document, item, artifact_type)
+            document.add_paragraph()
 
     fragments = {item["fragment_id"]: item for item in payload.get("fragments", [])}
     document.add_heading("Matriz de trazabilidad", level=1)
@@ -164,3 +113,64 @@ def _priority_source_label(value: Any) -> str:
         "no_definida": "No definida",
         "legado": "Registro anterior sin procedencia",
     }.get(str(value or ""), "No registrada")
+
+
+def _add_artifact_table(document: Any, item: dict[str, Any], artifact_type: str) -> None:
+    table = document.add_table(rows=1, cols=2)
+    table.style = "Table Grid"
+    header = table.rows[0].cells[0].merge(table.rows[0].cells[1])
+    header.text = f"{item['artifact_key']}. {item['title']}"
+    if header.paragraphs and header.paragraphs[0].runs:
+        header.paragraphs[0].runs[0].bold = True
+
+    def add_row(label: str, value: Any) -> None:
+        cells = table.add_row().cells
+        cells[0].text = label
+        cells[1].text = str(value)
+        if cells[0].paragraphs and cells[0].paragraphs[0].runs:
+            cells[0].paragraphs[0].runs[0].bold = True
+
+    def list_value(values: list[Any] | None, empty: str) -> str:
+        cleaned = [str(value).strip() for value in values or [] if str(value).strip()]
+        return "\n".join(f"• {value}" for value in cleaned) if cleaned else empty
+
+    add_row("Tipo", artifact_type)
+    add_row("Redacción", item["description"])
+    add_row("Prioridad", item["priority"])
+    add_row("Procedencia de prioridad", _priority_source_label(item.get("priority_source")))
+    add_row("Estado", item["status"])
+    add_row("Versión", item["version"])
+    add_row("Fuentes", ", ".join(item.get("source_fragments") or []) or "Sin evidencia asociada")
+    add_row(
+        "Artefactos relacionados",
+        ", ".join(item.get("related_artifacts") or []) or "Sin relaciones registradas",
+    )
+    if item.get("rationale"):
+        add_row("Justificación", item["rationale"])
+
+    if artifact_type in {"RF", "RNF"}:
+        add_row("Patrón de redacción", item.get("ears_pattern") or "No determinado")
+        add_row(
+            "Criterios de verificación",
+            list_value(item.get("verification_criteria"), "Pendiente de definición"),
+        )
+
+    if artifact_type == "RNF":
+        for label, key in (
+            ("Categoría de calidad", "quality_category"),
+            ("Métrica", "metric"),
+            ("Unidad", "unit"),
+            ("Umbral o valor objetivo", "target"),
+            ("Método de verificación", "verification_method"),
+        ):
+            add_row(label, item.get(key) or "Pendiente de definición")
+
+    if artifact_type == "HU":
+        add_row(
+            "Criterios de aceptación",
+            list_value(item.get("acceptance_criteria"), "Pendiente de definición"),
+        )
+
+    warnings = (item.get("validation") or {}).get("warnings", [])
+    if warnings:
+        add_row("Observaciones automáticas", list_value(warnings, "Sin observaciones"))
