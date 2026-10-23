@@ -5,10 +5,11 @@ import { Project } from '../../core/models';
 import { WorkspaceStore } from '../../core/workspace.store';
 import { IconComponent } from '../../shared/icon.component';
 import { TopbarComponent } from '../../shared/topbar.component';
+import { MainFlowDemoComponent } from './main-flow-demo/main-flow-demo.component';
 
 @Component({
   selector: 'app-project-list',
-  imports: [FormsModule, IconComponent, TopbarComponent],
+  imports: [FormsModule, IconComponent, TopbarComponent, MainFlowDemoComponent],
   template: `
     <app-topbar (settingsRequested)="openSettings()" />
     <main class="landing" id="inicio-reqlab">
@@ -17,13 +18,14 @@ import { TopbarComponent } from '../../shared/topbar.component';
           <div class="eyebrow">De la evidencia a la especificación</div>
           <h1>Tus fuentes.<br />Tus próximos <span>requisitos.</span></h1>
           <p>
-            Un espacio para entender el contexto, construir requisitos funcionales, requisitos no funcionales e historias de usuario mientas siges el hilo de cada
+            Un espacio para entender el contexto, construir requisitos funcionales, requisitos no funcionales e historias de usuario mientras sigues el hilo de cada
             decisión.
           </p>
-          <div class="gap">
+          <div class="hero-actions gap">
             <button class="btn primary" type="button" (click)="showForm.set(true)">
               <app-icon name="plus" /> Crear proyecto
             </button>
+            <a class="btn" href="#tus-proyectos" (click)="scrollToSection($event, 'tus-proyectos')">Ir a mis proyectos <app-icon name="arrow" /></a>
           </div>
         </div>
         <div class="hero-art" aria-hidden="true">
@@ -44,77 +46,6 @@ import { TopbarComponent } from '../../shared/topbar.component';
           <small>CADA PROPUESTA, CON SU EVIDENCIA</small>
         </div>
       </section>
-      <div class="row between">
-        <h2 style="font-size:20px">Tus proyectos</h2>
-        <small class="muted">{{ store.projects().length }} proyectos</small>
-      </div>
-      <div class="projects-toolbar">
-        <div class="segmented" aria-label="Filtrar proyectos">
-          @for (item of filters; track item) {
-            <button
-              type="button"
-              [class.active]="filter() === item"
-              (click)="filter.set(item)"
-              [attr.aria-pressed]="filter() === item"
-            >
-              {{ item }}
-            </button>
-          }
-        </div>
-        <label class="search"
-          ><app-icon name="search" /><input
-            [(ngModel)]="query"
-            placeholder="Buscar un proyecto"
-            aria-label="Buscar proyectos"
-        /></label>
-      </div>
-      @if (store.error()) {
-        <div class="alert error">{{ store.error() }}</div>
-      }
-      <div class="project-grid">
-        <button class="project-card new" type="button" (click)="showForm.set(true)">
-          <span class="project-icon"><app-icon name="plus" /></span>
-          <h3>Un nuevo comienzo</h3>
-          <p>Crea un proyecto y añade<br />tus primeras fuentes.</p>
-        </button>
-        @for (project of filteredProjects(); track project.id; let index = $index) {
-          <article
-            class="project-card"
-            [class.purple]="index % 3 === 1"
-            [class.sand]="index % 3 === 2"
-          >
-            <button class="project-card-main" type="button" (click)="open(project.id)" [attr.aria-label]="'Abrir proyecto ' + project.name">
-              <span class="project-icon"><app-icon [name]="projectIcon(project)" /></span>
-              <span
-                class="pill"
-                [class.green]="projectPhase(project) === 3"
-                [class.purple]="projectPhase(project) === 1"
-                [class.outline]="projectPhase(project) !== 1 && projectPhase(project) !== 3"
-                >{{ phaseNames[projectPhase(project)] }}</span
-              >
-              <h3>{{ project.name }}</h3>
-              <p>{{ project.source_count }} fuentes · {{ project.artifact_count }} artefactos</p>
-              <footer><span>{{ updatedLabel(project.updated_at) }}</span></footer>
-            </button>
-            <div class="project-card-actions">
-              <app-icon class="icon-btn" name="arrow" title="Abrir proyecto" [attr.aria-label]="'Abrir proyecto' + project.name" (click)="open(project.id)"/>
-              <app-icon class="icon-btn" name="archive" title="Archivar proyecto" [attr.aria-label]="'Archivar ' + project.name" (click)="archive(project)"/>
-              <app-icon class="icon-btn danger" name="trash" title="Eliminar proyecto" [attr.aria-label]="'Eliminar ' + project.name" (click)="requestDelete(project)"/>
-            </div>
-          </article>
-        }
-      </div>
-      @if (!store.loading() && filteredProjects().length === 0) {
-        <p class="empty-filter">No hay proyectos que coincidan con este filtro.</p>
-      }
-
-      <div class="learn-more-prompt">
-        <a class="learn-more-link" href="#conoce-reqlab" aria-label="Conoce más sobre ReqLab" (click)="scrollToSection($event, 'conoce-reqlab')">
-          <span class="learn-more-label">Conoce más sobre ReqLab</span>
-          <span class="learn-more-arrow"><app-icon name="chevron-down" /></span>
-        </a>
-      </div>
-
       <section class="about-reqlab" id="conoce-reqlab" aria-labelledby="about-reqlab-title">
         <header class="about-reqlab-head">
           <div>
@@ -127,44 +58,88 @@ import { TopbarComponent } from '../../shared/topbar.component';
           </p>
         </header>
 
-        <div class="about-flow" role="list" aria-label="Flujo principal de ReqLab">
-          <article class="about-flow-card sources" role="listitem">
-            <span class="about-step-number">01</span>
-            <span class="about-step-icon"><app-icon name="file" /></span>
-            <h3>Reúne las fuentes</h3>
-            <p>Sube documentos o pega correos, entrevistas, conversaciones y notas sin prepararlos.</p>
-            <small>PDF · DOCX · TXT · MD</small>
-          </article>
-          <span class="about-connector" aria-hidden="true"><app-icon name="arrow" /></span>
-          <article class="about-flow-card definition" role="listitem">
-            <span class="about-step-number">02</span>
-            <span class="about-step-icon"><app-icon name="chat" /></span>
-            <h3>Confirma la definición</h3>
-            <p>ReqLab interpreta el proyecto y pregunta únicamente por vacíos, dudas o contradicciones.</p>
-            <small>El contexto se confirma contigo</small>
-          </article>
-          <span class="about-connector" aria-hidden="true"><app-icon name="arrow" /></span>
-          <article class="about-flow-card generation" role="listitem">
-            <span class="about-step-number">03</span>
-            <span class="about-step-icon"><app-icon name="spark" /></span>
-            <h3>Genera con evidencia</h3>
-            <p>Los agentes especializados recuperan contexto y construyen propuestas relacionadas.</p>
-            <div class="about-artifact-types"><span>RF</span><span>RNF</span><span>HU</span></div>
-          </article>
-          <span class="about-connector" aria-hidden="true"><app-icon name="arrow" /></span>
-          <article class="about-flow-card review" role="listitem">
-            <span class="about-step-number">04</span>
-            <span class="about-step-icon"><app-icon name="check" /></span>
-            <h3>Revisa y comparte</h3>
-            <p>Comprueba fuentes, corrige, aprueba y exporta el resultado conservando su trazabilidad.</p>
-            <small>Tú mantienes el criterio final</small>
-          </article>
-        </div>
+        @defer (on viewport; prefetch on idle) {
+          <app-main-flow-demo />
+        } @placeholder {
+          <div class="rd-placeholder" aria-hidden="true"></div>
+        }
 
         <div class="about-principle">
           <app-icon name="link" />
           <span><strong>Una misma idea atraviesa todo el flujo:</strong> cada propuesta debe poder volver a su fuente.</span>
         </div>
+        <div class="learn-more-prompt">
+          <a class="learn-more-link" href="#tus-proyectos" (click)="scrollToSection($event, 'tus-proyectos')">
+            <span class="learn-more-label">Empieza a crear con ReqLab</span>
+            <span class="learn-more-arrow" aria-hidden="true"><app-icon name="chevron-down" /></span>
+          </a>
+        </div>
+      </section>
+
+      <section class="projects-section" id="tus-proyectos" aria-labelledby="projects-title" tabindex="-1">
+        <div class="row between">
+          <h2 id="projects-title" style="font-size:20px">Tus proyectos</h2>
+          <small class="muted">{{ store.projects().length }} proyectos</small>
+        </div>
+        <div class="projects-toolbar">
+          <div class="segmented" aria-label="Filtrar proyectos">
+            @for (item of filters; track item) {
+              <button
+                type="button"
+                [class.active]="filter() === item"
+                (click)="filter.set(item)"
+                [attr.aria-pressed]="filter() === item"
+              >
+                {{ item }}
+              </button>
+            }
+          </div>
+          <label class="search"
+            ><app-icon name="search" /><input
+              [(ngModel)]="query"
+              placeholder="Buscar un proyecto"
+              aria-label="Buscar proyectos"
+          /></label>
+        </div>
+        @if (store.error()) {
+          <div class="alert error">{{ store.error() }}</div>
+        }
+        <div class="project-grid">
+          <button class="project-card new" type="button" (click)="showForm.set(true)">
+            <span class="project-icon"><app-icon name="plus" /></span>
+            <h3>Un nuevo comienzo</h3>
+            <p>Crea un proyecto y añade<br />tus primeras fuentes.</p>
+          </button>
+          @for (project of filteredProjects(); track project.id; let index = $index) {
+            <article
+              class="project-card"
+              [class.purple]="index % 3 === 1"
+              [class.sand]="index % 3 === 2"
+            >
+              <button class="project-card-main" type="button" (click)="open(project.id)" [attr.aria-label]="'Abrir proyecto ' + project.name">
+                <span class="project-icon"><app-icon [name]="projectIcon(project)" /></span>
+                <span
+                  class="pill"
+                  [class.green]="projectPhase(project) === 3"
+                  [class.purple]="projectPhase(project) === 1"
+                  [class.outline]="projectPhase(project) !== 1 && projectPhase(project) !== 3"
+                  >{{ phaseNames[projectPhase(project)] }}</span
+                >
+                <h3>{{ project.name }}</h3>
+                <p>{{ project.source_count }} fuentes · {{ project.artifact_count }} artefactos</p>
+                <footer><span>{{ updatedLabel(project.updated_at) }}</span></footer>
+              </button>
+              <div class="project-card-actions">
+                <app-icon class="icon-btn" name="arrow" title="Abrir proyecto" [attr.aria-label]="'Abrir proyecto' + project.name" (click)="open(project.id)"/>
+                <app-icon class="icon-btn" name="archive" title="Archivar proyecto" [attr.aria-label]="'Archivar ' + project.name" (click)="archive(project)"/>
+                <app-icon class="icon-btn danger" name="trash" title="Eliminar proyecto" [attr.aria-label]="'Eliminar ' + project.name" (click)="requestDelete(project)"/>
+              </div>
+            </article>
+          }
+        </div>
+        @if (!store.loading() && filteredProjects().length === 0) {
+          <p class="empty-filter">No hay proyectos que coincidan con este filtro.</p>
+        }
       </section>
 
       <footer class="reqlab-footer">
@@ -332,14 +307,14 @@ export class ProjectListComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     void this.store.loadProjects();
   }
-  scrollToSection(event: Event, sectionId: 'inicio-reqlab' | 'conoce-reqlab'): void {
+  scrollToSection(event: Event, sectionId: 'inicio-reqlab' | 'conoce-reqlab' | 'tus-proyectos'): void {
     event.preventDefault();
     const target = document.getElementById(sectionId);
     if (!target) return;
 
     if (this.scrollAnimation !== undefined) cancelAnimationFrame(this.scrollAnimation);
     const start = window.scrollY;
-    const offset = sectionId === 'conoce-reqlab' ? 22 : 0;
+    const offset = sectionId === 'inicio-reqlab' ? 0 : 22;
     const maximum = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
     const destination = Math.min(
       maximum,
@@ -348,7 +323,8 @@ export class ProjectListComponent implements OnInit, OnDestroy {
     const distance = destination - start;
     const updateLocation = (): void => {
       const location = `${window.location.pathname}${window.location.search}`;
-      history.replaceState(null, '', sectionId === 'conoce-reqlab' ? `${location}#${sectionId}` : location);
+      history.replaceState(null, '', sectionId === 'inicio-reqlab' ? location : `${location}#${sectionId}`);
+      if (sectionId === 'tus-proyectos') target.focus({ preventScroll: true });
     };
 
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches || Math.abs(distance) < 2) {

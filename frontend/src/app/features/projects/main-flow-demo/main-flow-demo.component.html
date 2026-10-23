@@ -1,0 +1,816 @@
+<figure class="rd-demo" [class.rd-still]="still()">
+  <figcaption class="rd-caption">
+    <span><span class="rd-live-dot" aria-hidden="true"></span> Un recorrido por ReqLab</span>
+    <small>Ejemplo ficticio · tiempos abreviados</small>
+  </figcaption>
+  <div class="rd-window">
+    <div class="rd-chrome" aria-hidden="true">
+      <span class="rd-lights"><i></i><i></i><i></i></span>
+      <span
+        ><app-icon name="layers" /> ReqLab <span class="rd-chrome-sep">/</span>
+        {{ data.name }}</span
+      >
+      <app-icon name="shield" />
+    </div>
+    <div #viewport class="rd-viewport">
+      <div
+        #stage
+        class="rd-stage"
+        role="img"
+        aria-label="Flujo principal de ReqLab con un proyecto de ejemplo: seleccionar archivos del computador, procesar fuentes, confirmar la definición, generar propuestas, revisar su evidencia y descargar Word."
+        [style.--rd-k]="scale()"
+        [attr.data-step]="scene().i"
+        [attr.data-time]="t()"
+      >
+        <div class="rd-scene" aria-hidden="true" [style.opacity]="scene().opacity">
+          <header class="rd-topbar">
+            <div class="rd-brand">
+              <app-icon name="back" /><span class="rd-logo"><app-icon name="layers" /></span
+              ><strong>ReqLab</strong><span class="rd-separator"></span><span>{{ data.name }}</span>
+            </div>
+            <small class="rd-prototype">PROYECTO ACTIVO</small>
+          </header>
+          <div class="rd-stepper">
+            @for (step of steps; track step.name; let index = $index) {
+              <div
+                class="rd-phase"
+                [class.rd-current]="scene().i === index"
+                [class.rd-done]="scene().i > index"
+              >
+                <span class="rd-num">
+                  @if (scene().i > index) {
+                    <app-icon name="check" />
+                  } @else {
+                    {{ index + 1 }}
+                  }
+                </span>
+                <span
+                  ><strong>{{ step.name }}</strong
+                  ><small>{{ step.caption }}</small></span
+                >
+              </div>
+            }
+          </div>
+          <div class="rd-workspace">
+            <aside class="rd-panel rd-library">
+              <div class="rd-panel-head">
+                <strong
+                  ><app-icon name="file" /> Fuentes
+                  @if (sourceReady()) {
+                    <span class="rd-muted">16</span>
+                  }</strong
+                ><app-icon name="book" />
+              </div>
+              <div class="rd-library-body">
+                <div class="rd-btn rd-outline"><app-icon name="plus" /> Añadir fuentes</div>
+                @if (sourceReady()) {
+                  <div class="rd-source-list">
+                    @for (item of data.sources; track item.source_code) {
+                      <div class="rd-source">
+                        <app-icon name="file" /><span
+                          ><strong>{{ item.original_name }}</strong
+                          ><small>{{ item.source_code }} · {{ item.label }}</small></span
+                        ><span class="rd-check">✓</span>
+                      </div>
+                    }
+                  </div>
+                  @if (confirmed()) {
+                    <div class="rd-confirmed">
+                      <small>Aclaraciones del usuario</small>
+                      <p><app-icon name="chat" /> Definición confirmada</p>
+                    </div>
+                  }
+                } @else {
+                  <div class="rd-empty-library">
+                    <app-icon name="folder" />
+                    <p>Tus documentos son el punto de partida de todo el proceso.</p>
+                  </div>
+                }
+              </div>
+              <div class="rd-library-foot">
+                <app-icon name="shield" />
+                {{
+                  sourceReady()
+                    ? 'Fuentes listas para consultar. Cada fragmento conserva su procedencia.'
+                    : 'Tus documentos son el punto de partida de todo el proceso.'
+                }}<br /><span
+                  >{{
+                    confirmed()
+                      ? data.confirmedFragmentCount
+                      : sourceReady()
+                        ? data.fragmentCount
+                        : 0
+                  }}
+                  fragmentos indexados</span
+                >
+              </div>
+            </aside>
+            <section class="rd-panel rd-main">
+              <div class="rd-panel-head">
+                <strong>{{ panelTitle() }}</strong
+                ><small>{{
+                  scene().i === 3 ? 'Propuestas y decisiones' : 'Paso ' + (scene().i + 1) + ' de 5'
+                }}</small>
+              </div>
+              <div class="rd-body">
+                @switch (scene().i) {
+                  @case (0) {
+                    <div class="rd-label">
+                      <app-icon name="spark" />
+                      {{ sourceReady() ? 'El contexto está listo' : 'Tu espacio de trabajo' }}
+                    </div>
+                    <h2>
+                      {{
+                        sourceReady()
+                          ? 'Todo empieza por las fuentes'
+                          : 'Dale contexto a tu proyecto'
+                      }}
+                    </h2>
+                    <p class="rd-desc">
+                      {{
+                        sourceReady()
+                          ? 'Revisa qué documentos formarán parte del análisis antes de definir el sistema.'
+                          : 'Reúne la información que describe el sistema. Te ayudaremos a convertirla en propuestas de requisitos respaldadas por evidencia.'
+                      }}
+                    </p>
+                    @if (sourceReady()) {
+                      <div class="rd-notice">
+                        <app-icon name="check" />
+                        <div>
+                          <strong>16 fuentes disponibles</strong><br />Los documentos se procesaron
+                          con la misma canalización y cada fragmento conserva su procedencia.
+                        </div>
+                      </div>
+                    } @else {
+                      <div class="rd-dropzone">
+                        <app-icon name="upload" />
+                        <h3>Arrastra tus archivos aquí</h3>
+                        <p>
+                          Contexto del sistema, entrevistas transcritas,<br />procesos o reglas de
+                          negocio.
+                        </p>
+                        <div data-aim="choose-files" class="rd-btn rd-soft">
+                          Seleccionar archivos
+                        </div>
+                        <small>PDF con texto · DOCX · TXT · Markdown</small>
+                      </div>
+                    }
+                    <div class="rd-files" [class.rd-files-ready]="sourceReady()">
+                      @for (item of filesAttached() ? data.sources : []; track item.source_code) {
+                        <div class="rd-file-row">
+                          <app-icon name="file" /><span
+                            >{{ item.original_name
+                            }}<small>{{
+                              sourceReady()
+                                ? item.source_code + ' · indexed'
+                                : 'listo para procesar'
+                            }}</small></span
+                          ><span class="rd-pill" [class.rd-green]="sourceReady()">{{
+                            sourceReady() ? 'Lista' : 'Seleccionado'
+                          }}</span>
+                        </div>
+                      }
+                    </div>
+                    <footer class="rd-footer">
+                      <small>{{
+                        sourceReady()
+                          ? 'Siguiente: aclarar el objetivo y los límites.'
+                          : 'Añade al menos una fuente para continuar.'
+                      }}</small>
+                      <div
+                        data-aim="process"
+                        class="rd-btn rd-primary"
+                        [style.visibility]="filesAttached() ? 'visible' : 'hidden'"
+                        [class.rd-pressed]="pointer().press"
+                      >
+                        @if (sourceWorking()) {
+                          <app-icon
+                            name="history"
+                            [style.transform]="'rotate(' + t() * 240 + 'deg)'"
+                          />
+                          Procesando
+                        } @else {
+                          {{ sourceReady() ? 'Continuar a definición' : 'Procesar fuentes' }}
+                          <app-icon name="arrow" />
+                        }
+                      </div>
+                    </footer>
+                  }
+                  @case (1) {
+                    <div class="rd-label"><app-icon name="spark" /> Antes de generar</div>
+                    <h2>Confirma qué entendió ReqLab</h2>
+                    <p class="rd-desc">
+                      ReqLab interpreta las fuentes sin exigir una plantilla previa. Después te
+                      muestra una definición provisional y pregunta solamente por vacíos,
+                      ambigüedades, contradicciones o decisiones relevantes.
+                    </p>
+                    @if (!analysisReady()) {
+                      <div class="rd-notice">
+                        <app-icon name="book" />
+                        <div>
+                          <strong>El corpus aún no ha sido interpretado</strong><br />El análisis
+                          recorrerá los 135 fragmentos disponibles.
+                        </div>
+                      </div>
+                      <div class="rd-analysis">
+                        <app-icon name="spark" />
+                        <h3>Construir interpretación provisional</h3>
+                        <p>
+                          Identificaremos objetivo, problema, actores, alcance, exclusiones, reglas,
+                          expectativas de calidad y posibles conflictos, siempre con referencias a
+                          las fuentes.
+                        </p>
+                        <div
+                          data-aim="analyze"
+                          class="rd-btn rd-primary"
+                          [class.rd-pressed]="pointer().press"
+                        >
+                          {{
+                            t() >= definition.work ? 'Analizando todo el corpus' : 'Analizar corpus'
+                          }}
+                          <app-icon name="arrow" />
+                        </div>
+                        @if (t() >= definition.work) {
+                          <div class="rd-analysis-progress">
+                            <div class="rd-progress">
+                              <span
+                                [style.width.%]="
+                                  (100 * (t() - definition.work)) /
+                                  (definition.done - definition.work)
+                                "
+                              ></span>
+                            </div>
+                          </div>
+                        }
+                      </div>
+                    } @else {
+                      <div class="rd-notice">
+                        <app-icon name="check" />
+                        <div>
+                          <strong>Análisis completo del corpus</strong><br />Revisa la
+                          interpretación y corrige cualquier dato antes de confirmarla.
+                        </div>
+                      </div>
+                      <article class="rd-question">
+                        <div class="rd-question-head">
+                          <small>01 · Interpretación del corpus</small
+                          ><span class="rd-pill rd-green">Confianza alta</span>
+                        </div>
+                        <h3>{{ data.question.question }}</h3>
+                        <small class="rd-field-label">Interpretación provisional</small>
+                        <div class="rd-answer">{{ data.question.answer }}</div>
+                        <div class="rd-citations">
+                          <small>Evidencia:</small>
+                          @for (citation of data.question.evidence.slice(0, 3); track citation) {
+                            <span class="rd-citation"><app-icon name="link" /> {{ citation }}</span>
+                          }
+                        </div>
+                      </article>
+                      <footer class="rd-footer">
+                        <small>{{
+                          confirmed()
+                            ? 'Definición confirmada. Si la editas, deberás confirmarla de nuevo.'
+                            : 'La generación se habilita al confirmar esta interpretación.'
+                        }}</small>
+                        <div
+                          data-aim="confirm"
+                          class="rd-btn rd-primary"
+                          [class.rd-pressed]="pointer().press"
+                        >
+                          Confirmar definición <app-icon name="arrow" />
+                        </div>
+                      </footer>
+                    }
+                  }
+                  @case (2) {
+                    <div class="rd-label">
+                      <app-icon name="spark" /> De las fuentes a las propuestas
+                    </div>
+                    <h2>
+                      {{
+                        generationWorking()
+                          ? 'Construyendo tus artefactos…'
+                          : generated()
+                            ? 'La generación está completa'
+                            : 'Todo listo para generar'
+                      }}
+                    </h2>
+                    <p class="rd-desc">
+                      {{
+                        generationWorking()
+                          ? 'Puedes seguir cada etapa del proceso mientras los agentes consultan el corpus del proyecto.'
+                          : 'El sistema prepara propuestas de RF, RNF e historias de usuario y comprueba sus referencias. Tú decides qué conservar.'
+                      }}
+                    </p>
+                    @if (!generationWorking() && !generated()) {
+                      <section class="rd-budget">
+                        <small>Presupuesto adaptativo</small>
+                        <h3>Define el máximo por tipo de artefacto</h3>
+                        <p>
+                          Es un tope, no una cuota: cada agente puede devolver menos elementos si la
+                          evidencia no sustenta más.
+                        </p>
+                        <div class="rd-budget-grid">
+                          @for (type of budgetTypes; track type) {
+                            <div class="rd-budget-card">
+                              <div>
+                                <strong>{{ type }}</strong
+                                ><span
+                                  >Hasta <b>{{ data.budget[type].suggested }}</b></span
+                                >
+                              </div>
+                              <div class="rd-budget-track"><i></i></div>
+                              <small
+                                >Mín. {{ data.budget[type].minimum }} · Sugerido
+                                {{ data.budget[type].suggested }} · Máx.
+                                {{ data.budget[type].maximum }}</small
+                              >
+                            </div>
+                          }
+                        </div>
+                      </section>
+                    }
+                    <div class="rd-progress-label">
+                      <small>{{
+                        generated()
+                          ? '6 etapas completadas'
+                          : generationWorking()
+                            ? 'Ejecución en curso'
+                            : '16 fuentes · definición confirmada'
+                      }}</small
+                      ><span class="rd-pill rd-green">{{ progress() }} %</span>
+                    </div>
+                    <div class="rd-progress"><span [style.width.%]="progress()"></span></div>
+                    @if (generationWorking() || generated()) {
+                      <div class="rd-execution">
+                        @for (item of execution; track item.label; let index = $index) {
+                          <div
+                            class="rd-execution-row"
+                            [class.rd-execution-done]="progress() >= ((index + 1) * 100) / 6"
+                            [class.rd-execution-active]="
+                              generationWorking() &&
+                              progress() >= (index * 100) / 6 &&
+                              progress() < ((index + 1) * 100) / 6
+                            "
+                          >
+                            <span class="rd-status">
+                              @if (progress() >= ((index + 1) * 100) / 6) {
+                                <app-icon name="check" />
+                              } @else {
+                                {{ index + 1 }}
+                              }
+                            </span>
+                            <div>
+                              <strong>{{ item.label }}</strong
+                              ><small>{{ item.description }}</small>
+                            </div>
+                            <app-icon [name]="item.icon" />
+                          </div>
+                        }
+                      </div>
+                    }
+                    <footer class="rd-footer">
+                      <small>Las propuestas siempre pasan por revisión humana.</small>
+                      <div
+                        data-aim="generate"
+                        class="rd-btn rd-primary"
+                        [class.rd-pressed]="pointer().press"
+                      >
+                        @if (generated()) {
+                          Revisar propuestas <app-icon name="arrow" />
+                        } @else {
+                          <app-icon name="spark" />
+                          {{ generationWorking() ? 'Generando' : 'Generar propuestas' }}
+                        }
+                      </div>
+                    </footer>
+                  }
+                  @case (3) {
+                    <div class="rd-label"><app-icon name="spark" /> El criterio final es tuyo</div>
+                    <h2>De propuestas a requisitos</h2>
+                    <p class="rd-desc">
+                      Inspecciona la evidencia, ajusta la redacción y registra tus decisiones antes
+                      de preparar la entrega.
+                    </p>
+                    <div class="rd-tabs">
+                      <span class="rd-tab-active">Artefactos</span><span>Trazabilidad</span
+                      ><span>Observaciones ({{ data.alertCount }})</span><span>Ejecución</span>
+                    </div>
+                    <div class="rd-review-toolbar">
+                      <div class="rd-review-count">
+                        <span>72 propuestas · {{ approved() ? 0 : 72 }} por revisar</span
+                        ><span><app-icon name="link" /> 72 con fuente vinculada</span>
+                      </div>
+                      <div class="rd-review-actions">
+                        <div class="rd-btn rd-manage-priorities">
+                          <app-icon name="layers" /> Gestionar prioridades
+                        </div>
+                        <div
+                          data-aim="approve-all"
+                          class="rd-btn rd-primary"
+                          [class.rd-approved-button]="approved()"
+                          [class.rd-pressed]="
+                            pointer().press && t() >= review.approve && t() < review.dialog
+                          "
+                        >
+                          <app-icon name="check" />
+                          {{ approved() ? 'Todo aprobado' : 'Aprobar todo' }}
+                        </div>
+                      </div>
+                    </div>
+                    <div class="rd-filters">
+                      <span class="rd-filter-active">Todos (72)</span><span>RF (24)</span
+                      ><span>RNF (24)</span><span>HU (24)</span
+                      ><span>Aprobados ({{ approved() ? 72 : 0 }})</span>
+                    </div>
+                    <div class="rd-artifacts">
+                      @for (
+                        artifact of data.artifacts;
+                        track artifact.artifact_key;
+                        let index = $index
+                      ) {
+                        <article
+                          class="rd-artifact"
+                          [class.rd-selected]="index === 0 && evidenceOpen()"
+                        >
+                          <div class="rd-artifact-head">
+                            <strong>{{ artifact.artifact_key }}</strong
+                            ><span class="rd-pill" [class.rd-green]="approved()">{{
+                              approved() ? 'Aprobado' : 'Propuesto'
+                            }}</span>
+                          </div>
+                          <h3>{{ artifact.title }}</h3>
+                          <p>{{ artifact.description }}</p>
+                          <div class="rd-citations">
+                            @for (citation of artifact.citations; track citation) {
+                              <span
+                                class="rd-citation"
+                                [attr.data-aim]="
+                                  citation === data.evidence.fragment_key ? 'citation' : null
+                                "
+                                [class.rd-citation-selected]="
+                                  citation === data.evidence.fragment_key && evidenceOpen()
+                                "
+                              >
+                                <app-icon name="link" /> {{ citation }}</span
+                              >
+                            }
+                            <span class="rd-review-link">Revisar <app-icon name="arrow" /></span>
+                          </div>
+                        </article>
+                      }
+                    </div>
+                  }
+                  @case (4) {
+                    <div class="rd-label"><app-icon name="spark" /> Una entrega con contexto</div>
+                    <h2>Prepara los resultados</h2>
+                    <p class="rd-desc">
+                      Exporta los artefactos junto con sus fuentes, estados de revisión y
+                      decisiones. La entrega conserva la diferencia entre una propuesta y un
+                      requisito aprobado.
+                    </p>
+                    <div class="rd-notice rd-notice-amber">
+                      <app-icon name="warning" />
+                      <div>
+                        <strong>La entrega se identificará como borrador</strong><br />{{
+                          data.exportAlertCount
+                        }}
+                        observaciones automáticas pendientes. Puedes exportar el avance con sus
+                        estados actuales.
+                      </div>
+                    </div>
+                    <h3 class="rd-format-heading">Formato de entrega</h3>
+                    <div class="rd-format-card" [class.rd-format-selected]="!wordSelected()">
+                      <span class="rd-radio" [class.rd-radio-selected]="!wordSelected()"></span
+                      ><app-icon name="layers" />
+                      <div>
+                        <strong>JSON</strong
+                        ><small>Datos estructurados, referencias, versiones y validación.</small>
+                      </div>
+                    </div>
+                    <div
+                      data-aim="word"
+                      class="rd-format-card"
+                      [class.rd-format-selected]="wordSelected()"
+                    >
+                      <span class="rd-radio" [class.rd-radio-selected]="wordSelected()"></span
+                      ><app-icon name="file" />
+                      <div>
+                        <strong>Documento Word (.docx)</strong
+                        ><small
+                          >Documento editable con definición, artefactos y trazabilidad.</small
+                        >
+                      </div>
+                    </div>
+                    <div class="rd-export-summary">
+                      <div>
+                        <span>Contenido</span
+                        ><strong>72 artefactos · {{ approved() ? 72 : 0 }} aprobados</strong>
+                      </div>
+                      <div>
+                        <span>Evidencia documental</span><strong>16 fuentes con fragmentos</strong>
+                      </div>
+                      <div><span>Incluye</span><strong>Estados, citas y observaciones</strong></div>
+                    </div>
+                    <footer class="rd-footer">
+                      <small
+                        >La exportación utiliza las versiones vigentes<br />almacenadas para este
+                        proyecto.</small
+                      >
+                      <div
+                        data-aim="download"
+                        class="rd-btn rd-primary"
+                        [class.rd-pressed]="pointer().press && t() >= export.click"
+                      >
+                        <app-icon name="download" /> Descargar
+                        {{ wordSelected() ? 'DOCX' : 'JSON' }}
+                      </div>
+                    </footer>
+                  }
+                }
+              </div>
+            </section>
+            <aside class="rd-panel rd-results">
+              <div class="rd-panel-head">
+                <strong>{{ evidenceOpen() ? 'Evidencia de origen' : 'Resultados' }}</strong>
+                @if (evidenceOpen()) {
+                  <span>×</span>
+                }
+              </div>
+              <div class="rd-results-body">
+                @if (evidenceOpen()) {
+                  <div class="rd-label"><app-icon name="file" /> Fuente documental</div>
+                  <h3>{{ data.evidence.heading }}</h3>
+                  <p class="rd-source-name">{{ data.evidence.source_name }}</p>
+                  <div class="rd-evidence-key">{{ data.evidence.fragment_key }}</div>
+                  <div class="rd-evidence">
+                    <div
+                      [style.transform]="
+                        'translateY(' +
+                        -138 *
+                          (still() ? 1 : t() >= 1.8 ? (t() >= 2.6 ? 1 : (t() - 1.8) / 0.8) : 0) +
+                        'px)'
+                      "
+                    >
+                      {{ data.evidence.text }}
+                    </div>
+                  </div>
+                  <p class="rd-evidence-note">
+                    Fragmento original vinculado. El enlace permite localizar la evidencia; su
+                    pertinencia requiere revisión humana.
+                  </p>
+                } @else {
+                  <div class="rd-result-grid" [class.rd-result-pending]="!generated()">
+                    @for (tile of resultTiles; track tile.label) {
+                      <div [class]="'rd-result-tile rd-tone-' + tile.tone">
+                        <div>
+                          <app-icon [name]="tile.icon" /><span>
+                            @if (tile.type) {
+                              {{ generated() ? data.counts[tile.type] : '—' }}
+                            } @else if (tile.icon === 'eye') {
+                              {{ generated() ? data.alertCount : 0 }}
+                            } @else {
+                              <app-icon name="arrow" />
+                            }
+                          </span>
+                        </div>
+                        <strong>{{ tile.label }}</strong>
+                      </div>
+                    }
+                  </div>
+                  @if (generated()) {
+                    <div class="rd-review-state">
+                      <h3>Estado de la revisión</h3>
+                      <p>
+                        <app-icon name="check" /> {{ approved() ? 72 : 0 }} de 72 artefactos
+                        aprobados
+                      </p>
+                      <div class="rd-progress">
+                        <span [style.width.%]="approved() ? 100 : 0"></span>
+                      </div>
+                      <p><app-icon name="link" /> 72 artefactos con evidencia</p>
+                    </div>
+                    <div class="rd-next-card">
+                      <h3><app-icon name="eye" /> Una revisión que deja huella</h3>
+                      <p>
+                        Cada cambio conserva una versión. Consulta la evidencia antes de aprobar una
+                        propuesta.
+                      </p>
+                      <div class="rd-btn rd-outline">Abrir revisión</div>
+                    </div>
+                  } @else {
+                    <div class="rd-empty-results">
+                      <app-icon name="spark" />
+                      <p>Aquí aparecerán los artefactos<br />que construyas con tus fuentes.</p>
+                    </div>
+                  }
+                }
+              </div>
+            </aside>
+          </div>
+          @if (scene().i === 0) {
+            <div class="rd-picker-overlay" [class.rd-picker-visible]="pickerOpen()">
+              <div class="rd-picker">
+                <div class="rd-picker-title">
+                  <span><app-icon name="folder" /> Abrir</span><span>×</span>
+                </div>
+                <div class="rd-picker-path">
+                  <app-icon name="back" /><span
+                    >Este equipo <b>›</b> Documentos <b>›</b> {{ data.name }}</span
+                  ><app-icon name="search" />
+                </div>
+                <div class="rd-picker-layout">
+                  <aside>
+                    <span><app-icon name="folder" /> Escritorio</span
+                    ><span><app-icon name="download" /> Descargas</span
+                    ><span class="rd-picker-location"><app-icon name="file" /> Documentos</span
+                    ><span><app-icon name="folder" /> Este equipo</span>
+                  </aside>
+                  <div class="rd-picker-browser">
+                    <div class="rd-picker-columns"><span>Nombre</span><span>Tipo</span></div>
+                    <div class="rd-picker-files">
+                      @for (item of data.sources; track item.source_code; let index = $index) {
+                        <div
+                          [attr.data-aim]="index === 1 ? 'computer-files' : null"
+                          class="rd-picker-file"
+                          [class.rd-picker-file-selected]="t() >= source.selected"
+                        >
+                          <span><app-icon name="file" /> {{ item.original_name }}</span
+                          ><small>{{ item.original_name.split('.').pop()?.toUpperCase() }}</small>
+                        </div>
+                      }
+                    </div>
+                    <div class="rd-picker-selection">
+                      @if (t() >= source.selected) {
+                        <span>16 elementos seleccionados</span><kbd>Ctrl + A</kbd>
+                      } @else {
+                        <span>16 elementos</span>
+                      }
+                    </div>
+                  </div>
+                </div>
+                <div class="rd-picker-bottom">
+                  <div class="rd-picker-name">
+                    <span>Nombre de archivo:</span>
+                    <div>{{ t() >= source.selected ? '"' + sourceFilenames + '"' : '' }}</div>
+                  </div>
+                  <div class="rd-picker-actions">
+                    <span>Archivos personalizados</span>
+                    <div
+                      data-aim="open-files"
+                      class="rd-picker-open"
+                      [class.rd-picker-open-disabled]="t() < source.selected"
+                    >
+                      Abrir
+                    </div>
+                    <div>Cancelar</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          }
+          @if (scene().i === 3) {
+            <div class="rd-approval-overlay" [class.rd-approval-visible]="approvalOpen()">
+              <section class="rd-approval-dialog">
+                <span class="rd-pill rd-amber">Decisión masiva</span
+                ><span class="rd-approval-close">×</span>
+                <h2>¿Aprobar todos los artefactos?</h2>
+                <p>
+                  Se marcarán como aprobados 72 artefactos que actualmente no lo están, incluidos
+                  los que estén propuestos, requieran aclaración o hayan sido descartados.
+                </p>
+                <div class="rd-notice rd-notice-amber">
+                  <app-icon name="warning" />
+                  <div>
+                    <strong>Las observaciones automáticas no desaparecerán.</strong><br />Esta
+                    acción registra tu decisión humana, pero no garantiza que la redacción,
+                    clasificación o trazabilidad sean correctas. Cada cambio quedará en el
+                    historial.
+                  </div>
+                </div>
+                <div class="rd-approval-actions">
+                  <div class="rd-btn rd-manage-priorities">Cancelar</div>
+                  <div
+                    data-aim="confirm-approval"
+                    class="rd-btn rd-primary"
+                    [class.rd-pressed]="pointer().press && t() >= review.confirm"
+                  >
+                    Sí, aprobar todo
+                  </div>
+                </div>
+              </section>
+            </div>
+          }
+          @if (downloadStarted()) {
+            <div
+              class="rd-download-popover"
+              [style.opacity]="still() ? 1 : (t() - export.work) / 0.2"
+              [style.transform]="
+                'translateY(' +
+                (still() || t() >= export.work + 0.2 ? 0 : (1 - (t() - export.work) / 0.2) * -12) +
+                'px)'
+              "
+            >
+              <div class="rd-download-heading">
+                <strong>Descargas</strong><app-icon name="download" />
+              </div>
+              <div class="rd-download-file">
+                <span class="rd-word-icon">W</span>
+                <div>
+                  <strong>Proyecto_de_ejemplo_requisitos.docx</strong
+                  ><small>{{ downloadComplete() ? 'Completada' : 'Descargando…' }}</small>
+                </div>
+                @if (downloadComplete()) {
+                  <app-icon name="check" />
+                }
+              </div>
+              @if (!downloadComplete()) {
+                <div class="rd-progress">
+                  <span
+                    [style.width.%]="(100 * (t() - export.work)) / (export.done - export.work)"
+                  ></span>
+                </div>
+              } @else {
+                <span class="rd-download-open">Abrir archivo</span>
+              }
+              <small class="rd-download-note">Descarga de demostración</small>
+            </div>
+          }
+          <div
+            class="rd-pointer"
+            [class.rd-pointer-press]="pointer().press"
+            [style.left.px]="pointer().x"
+            [style.top.px]="pointer().y"
+            [style.opacity]="pointer().opacity"
+          >
+            <span class="rd-pointer-ring"></span
+            ><svg width="29" height="35" viewBox="0 0 29 35">
+              <path
+                d="M3 2 24 21l-10 1-5 9L3 2Z"
+                fill="#f7faf7"
+                stroke="#151b18"
+                stroke-width="1.8"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <nav class="rd-steps" aria-label="Pasos de la demostración">
+    @for (step of steps; track step.name; let index = $index) {
+      <button
+        type="button"
+        [class.rd-step-active]="position().i === index"
+        [attr.aria-current]="position().i === index ? 'step' : null"
+        (click)="playStep(index)"
+      >
+        <span class="rd-step-index">0{{ index + 1 }}</span
+        ><span>{{ step.name }}</span
+        ><span
+          class="rd-step-progress"
+          [style.transform]="
+            'scaleX(' + (position().i === index ? (still() ? 1 : position().t / step.dur) : 0) + ')'
+          "
+        ></span>
+      </button>
+    }
+  </nav>
+  <div class="rd-controls">
+    @if (still()) {
+      <span>Vista sin movimiento · selecciona un paso</span>
+    } @else {
+      <button
+        type="button"
+        class="rd-play"
+        (click)="togglePlayback()"
+        [attr.aria-label]="paused() ? 'Reproducir demostración' : 'Pausar demostración'"
+      >
+        @if (paused()) {
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="m4 2 9 6-9 6Z" fill="currentColor" />
+          </svg>
+        } @else {
+          <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M4 2v12M12 2v12" stroke="currentColor" stroke-width="3" />
+          </svg>
+        }
+      </button>
+      <input
+        class="rd-scrubber"
+        type="range"
+        min="0"
+        [max]="total"
+        step="0.01"
+        [value]="elapsed()"
+        (input)="seek($event)"
+        aria-label="Recorrer demostración"
+        [attr.aria-valuetext]="
+          steps[position().i].name + ', ' + timeLabel(elapsed()) + ' de ' + timeLabel(total)
+        "
+      />
+      <span class="rd-time">{{ timeLabel(elapsed()) }} / {{ timeLabel(total) }}</span>
+    }
+  </div>
+</figure>

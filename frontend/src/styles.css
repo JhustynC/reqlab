@@ -1,4 +1,5 @@
 @charset "UTF-8";
+@import './app/features/projects/main-flow-demo/main-flow-demo.component.css';
 :root {
   color-scheme: dark;
   --bg: #191c1e;
@@ -347,6 +348,23 @@ small {
 .hero .eyebrow {
   margin-bottom: 16px;
 }
+.hero-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.hero-actions > a {
+  text-decoration: none;
+}
+.projects-section {
+  scroll-margin-top: 22px;
+  padding: 30px 28px 34px;
+  border-radius: 26px;
+  background:
+    radial-gradient(ellipse at 0% 0%, #45624b24, transparent 65%),
+    linear-gradient(145deg, #252d2880, #22262940);
+}
 .hero-art {
   height: 255px;
   border: 1px solid #343c39;
@@ -565,7 +583,7 @@ small {
 .learn-more-prompt {
   display: flex;
   justify-content: center;
-  padding: 48px 0 74px;
+  padding: 36px 0 6px;
 }
 .learn-more-link {
   color: var(--mint);
@@ -577,10 +595,10 @@ small {
 }
 .learn-more-label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.08em;
-  opacity: 0;
-  transform: translateY(7px);
+  opacity: 1;
+  transform: none;
   transition: opacity 0.25s ease, transform 0.25s ease, color 0.25s ease;
 }
 .learn-more-arrow {
@@ -617,8 +635,18 @@ small {
 }
 .about-reqlab {
   scroll-margin-top: 22px;
-  padding: 70px 0 76px;
-  border-top: 1px solid #323a36;
+  padding: 48px 0 38px;
+  position: relative;
+  isolation: isolate;
+}
+.about-reqlab::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  inset: 0 0 auto;
+  height: 260px;
+  background: radial-gradient(ellipse at 28% 45%, #577c5e12, transparent 70%);
 }
 .about-reqlab-head {
   display: grid;
@@ -760,7 +788,10 @@ small {
 }
 .reqlab-footer {
   min-height: 135px;
-  border-top: 1px solid #323a36;
+  margin-top: 48px;
+  padding: 24px;
+  border-radius: 20px;
+  background: linear-gradient(180deg, #29312c44, transparent);
   display: grid;
   grid-template-columns: auto minmax(220px, 1fr) auto;
   align-items: center;
@@ -2175,7 +2206,11 @@ dialog .actions {
     padding: 10px 20px 35px;
   }
   .learn-more-prompt {
-    padding: 38px 0 55px;
+    padding: 32px 0 4px;
+  }
+  .projects-section {
+    padding: 26px 16px 28px;
+    border-radius: 20px;
   }
   .learn-more-label {
     opacity: 1;
